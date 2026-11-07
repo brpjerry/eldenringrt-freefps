@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 from verify_package import find_archive, sha, validate_package
 from version import ROOT, check_tag, release_version
 
@@ -48,9 +49,15 @@ def main():
         gh("release", "create", args.tag, "--repo", repo, "--verify-tag", "--target", args.commit,
            "--draft", "--title", title,
            "--notes-file", ROOT / "docs" / "RELEASE_NOTES.md", *options)
-        existing = find_release(repo, args.tag)
+        # Draft creation can return before the release-list endpoint reflects it.
+        for attempt in range(11):
+            existing = find_release(repo, args.tag)
+            if existing is not None:
+                break
+            if attempt < 10:
+                time.sleep(2)
         if existing is None:
-            raise SystemExit("Created draft could not be found; refusing publication.")
+            raise SystemExit("Created draft could not be found; rerun this job to resume publication.")
     release_endpoint = f"repos/{repo}/releases/{existing['id']}"
     assets = [archive, archive.with_suffix(".zip.sha256")]
     gh("release", "upload", args.tag, *assets, "--repo", repo, "--clobber")

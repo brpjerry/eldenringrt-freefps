@@ -27,6 +27,7 @@ class ReleaseTests(unittest.TestCase):
         self.record = None
         self.mutations = []
         self.bad_digest = False
+        self.visibility_delay = 0
 
     def draft(self):
         return {"id": 123, "tag_name": self.tag, "draft": True,
@@ -41,7 +42,11 @@ class ReleaseTests(unittest.TestCase):
             elif endpoint == f"repos/{self.repo}/releases":
                 self.assertEqual(args[2:], ("--paginate", "--slurp"))
                 # Relevant draft is on a later page; lookup must handle pagination.
-                result = [[{"tag_name": "unrelated"}], [self.record] if self.record else []]
+                visible = self.record
+                if visible is not None and self.visibility_delay:
+                    self.visibility_delay -= 1
+                    visible = None
+                result = [[{"tag_name": "unrelated"}], [visible] if visible else []]
             elif endpoint == f"repos/{self.repo}/releases/123":
                 result = copy.deepcopy(self.record)
             else:
@@ -69,13 +74,27 @@ class ReleaseTests(unittest.TestCase):
              patch.object(sys, "argv", ["release.py", "--tag", self.tag, "--commit", self.commit]), \
              patch.object(release, "find_archive", return_value=self.archive), \
              patch.object(release, "validate_package", return_value={"version": self.tag[1:]}), \
-             patch.object(release, "gh", side_effect=self.gh), patch("builtins.print"):
+             patch.object(release, "gh", side_effect=self.gh), \
+             patch.object(release.time, "sleep"), patch("builtins.print"):
             release.main()
 
     def test_new_draft_is_verified_before_publishing(self):
         self.invoke()
         self.assertEqual(self.mutations, ["create", "upload", "publish"])
         self.assertFalse(self.record["draft"])
+
+    def test_delayed_draft_visibility_is_retried(self):
+        self.visibility_delay = 3
+        self.invoke()
+        self.assertEqual(self.mutations, ["create", "upload", "publish"])
+        self.assertFalse(self.record["draft"])
+
+    def test_draft_lookup_timeout_stays_unpublished(self):
+        self.visibility_delay = 20
+        with self.assertRaisesRegex(SystemExit, "rerun this job"):
+            self.invoke()
+        self.assertEqual(self.mutations, ["create"])
+        self.assertTrue(self.record["draft"])
 
     def test_existing_matching_draft_can_resume(self):
         self.record = self.draft()
