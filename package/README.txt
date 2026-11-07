@@ -1,5 +1,5 @@
-ELDEN RING RT BATCHING 1.0 - PORTABLE PACKAGE
-Experimental release, packaged 2026-11-07
+ELDEN RING RT BATCHING - PORTABLE PACKAGE
+Experimental release; see manifest.json for version and source commit.
 
 QUICK INSTALL
 

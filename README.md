@@ -1,12 +1,14 @@
 # Elden Ring RT Batching
 
+[![Build and release](https://github.com/brpjerry/eldenringrt-freefps/actions/workflows/build.yml/badge.svg)](https://github.com/brpjerry/eldenringrt-freefps/actions/workflows/build.yml)
+
 An experimental DirectX 12 mod that batches independent vegetation ray-tracing acceleration-structure refits in Elden Ring. The default mode preserves every-frame vegetation updates and the game's RT quality settings.
 
 The project consists of a ReShade add-on and a small native integration patch against a pinned ReShade revision. A stock ReShade runtime does not include the required batching hooks.
 
 ## Install the packaged mod
 
-Use the portable release ZIP, extract it into a writable folder outside the game's `Game` directory, and double-click `eldenring-rt-batching.me3` after installing [ME3](https://github.com/garyttierney/me3/releases/latest). The profile runs offline and uses a separate `rt-batching.sl2` save. Enable ray tracing in the game and reload your character after changing RT.
+Download the portable ZIP from [Releases](https://github.com/brpjerry/eldenringrt-freefps/releases), extract it into a writable folder outside the game's `Game` directory, and double-click `eldenring-rt-batching.me3` after installing [ME3](https://github.com/garyttierney/me3/releases/latest). The profile runs offline and uses a separate `rt-batching.sl2` save. Enable ray tracing in the game and reload your character after changing RT.
 
 See [the installation instructions](package/README.txt) for save handling, optional ReShade effects, configuration and removal. The published package contains no CMD/PowerShell launchers or live-control scripts. It does not unlock the game's FPS cap.
 
@@ -41,5 +43,9 @@ This is an unofficial modified ReShade build. Use the offline profile with EAC d
 - `scripts/`: dependency preparation, build, package and source checks.
 - `package/`: public profile, configuration and installation instructions.
 - `licenses/`: preserved upstream notices.
+
+## CI and releases
+
+Pull requests and pushes to main build the x64 runtime and tests on Windows, run CPU-only policy checks, and upload a verified portable ZIP. Tags matching `version.json` publish an experimental release after the build succeeds. The hosted runner compiles the DXR test but cannot run it or the game. See [BUILDING.md](BUILDING.md#ci-and-releases).
 
 New project code is licensed under [BSD 3-Clause](LICENSE). ReShade and the borrowed profiler retain their own notices; see [THIRD_PARTY.md](THIRD_PARTY.md).

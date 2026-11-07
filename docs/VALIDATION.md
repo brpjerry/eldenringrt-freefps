@@ -25,6 +25,6 @@ The original output is retained in [original-gpu-test.txt](original-gpu-test.txt
 
 ## Rebuilds
 
-Publication preparation verified the pinned integration patch on a fresh checkout, source/package hygiene, and packaging with the original tested binaries. A fresh full build was interrupted during native compilation and has not been completed; no fresh-build or new GPU-test pass is claimed.
+Publication preparation verified the pinned integration patch on a fresh checkout, source/package hygiene, and packaging with the original tested binaries. The first local full build was interrupted during native compilation. The GitHub Actions workflow now records fresh compilation, CPU-policy and package checks separately; a hosted CI pass does not imply a new GPU or in-game test pass.
 
 A successful build or standalone test does not prove that a newly built runtime is interchangeable in every game scene. Record compiler/SDK versions, run the test, and perform an offline in-game smoke test before publishing changed binaries. The public package manifest distinguishes original tested hashes from rebuilt artifacts.

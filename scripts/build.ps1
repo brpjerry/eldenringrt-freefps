@@ -69,10 +69,28 @@ if($Target -in 'All','Test'){
             (Join-Path $repo 'tests\native_batch_test.cpp'),
             (Join-Path $repo 'src\native\er_batch.cpp'),'/Fenative_batch_test.exe',
             '/link','user32.lib','d3d12.lib','dxgi.lib') (Join-Path $build 'test-build.log')
+        Invoke-Logged $cl @('/nologo','/std:c++20','/EHsc','/W4','/MT','/O2',
+            "/I$repo\src\addon",(Join-Path $repo 'tests\vegetation_policy_test.cpp'),
+            '/Fevegetation_policy_test.exe') (Join-Path $build 'policy-build.log')
+        Invoke-Logged (Join-Path $tests 'vegetation_policy_test.exe') @() (Join-Path $build 'policy-test-results.txt')
+        Get-Content -LiteralPath (Join-Path $build 'policy-test-results.txt')
         if($RunGpuTests){
             Invoke-Logged (Join-Path $tests 'native_batch_test.exe') @() (Join-Path $build 'gpu-test-results.txt')
             Get-Content -LiteralPath (Join-Path $build 'gpu-test-results.txt')
         }
     } finally {Pop-Location}
 }
+$sourceCommit=(& git -C $repo rev-parse HEAD).Trim()
+if($LASTEXITCODE -ne 0){throw 'Cannot identify source commit.'}
+[ordered]@{
+    source_commit=$sourceCommit
+    target=$Target
+    visual_studio_version=(& $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion)
+    addon_msvc_toolset=$env:VCToolsVersion
+    native_sdk=$SdkVersion
+    addon_sdk=$env:WindowsSDKVersion
+    compiler_workers=$Jobs
+    cpu_policy_test_run=($Target -in 'All','Test')
+    gpu_test_run=([bool]$RunGpuTests -and $Target -in 'All','Test')
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $build 'build-info.json') -Encoding UTF8
 Write-Output "Built $Target. Outputs are under build/. No game files were changed."

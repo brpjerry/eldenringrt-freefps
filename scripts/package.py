@@ -5,8 +5,11 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import tomllib
 import zipfile
+from version import release_version
+from verify_package import validate_package
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = json.loads((ROOT / "upstream.json").read_text(encoding="utf-8"))
@@ -21,6 +24,8 @@ def main():
     parser.add_argument("--binaries", type=Path, default=ROOT / "build" / "bin")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
+    version = release_version()["version"]
+    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
     members = {name: (args.binaries / name).read_bytes() for name in BINARIES}
     hashes = {name: sha(members[name]) for name in BINARIES}
     for name, data in members.items():
@@ -39,7 +44,8 @@ def main():
         raise SystemExit("Unexpected public native list.")
     original = hashes == PIN["original_game_tested_sha256"]
     manifest = {
-        "name": "Elden Ring RT Batching", "version": "1.0-portable-experimental",
+        "name": "Elden Ring RT Batching", "version": version,
+        "source_commit": source_commit,
         "runtime_base": PIN["tag"], "runtime_base_commit": PIN["commit"],
         "binary_sha256": hashes, "matches_original_game_tested_binaries": original,
         "launch_entry": "eldenring-rt-batching.me3", "includes_control_scripts": False,
@@ -47,6 +53,11 @@ def main():
         "savefile": profile["savefile"],
         "validation_note": "Original in-game results apply only to the recorded original hashes.",
     }
+    build_info = args.binaries.parent / "build-info.json"
+    if build_info.is_file():
+        manifest["build_info"] = json.loads(build_info.read_text(encoding="utf-8-sig"))
+        if manifest["build_info"]["source_commit"] != source_commit:
+            raise SystemExit("Build metadata refers to another source commit. Rebuild before packaging.")
     members["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     for name, data in members.items():
         if Path(name).suffix.lower() in {".cmd", ".ps1", ".bat", ".sl2", ".dxbc", ".pdb", ".obj", ".log"}:
@@ -60,7 +71,7 @@ def main():
     members["SHA256SUMS.txt"] = "".join(
         f"{sha(data)}  {name}\n" for name, data in sorted(members.items())).encode()
     args.output.mkdir(parents=True, exist_ok=True)
-    archive = args.output / "EldenRing-RT-Batching-1.0-portable.zip"
+    archive = args.output / f"EldenRing-RT-Batching-{version}-portable.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name, data in sorted(members.items()):
             entry = zipfile.ZipInfo("RT-Batching/" + name, (2026, 11, 7, 0, 0, 0))
@@ -75,6 +86,7 @@ def main():
                 raise SystemExit(f"ZIP member mismatch: {name}")
     archive.with_suffix(".zip.sha256").write_text(
         f"{sha(archive.read_bytes())}  {archive.name}\n", encoding="ascii")
+    validate_package(archive, source_commit)
     print(f"Packaged {len(members)} files. Original game-tested hashes: {original}.")
     print(archive)
 
