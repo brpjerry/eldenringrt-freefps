@@ -12,6 +12,14 @@ def gh(*args, capture=False, check=True):
                           stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if capture else None)
 
+def find_release(repo, tag):
+    # The by-tag endpoint only returns published releases. List releases to find drafts.
+    pages = json.loads(gh("api", f"repos/{repo}/releases", "--paginate", "--slurp", capture=True).stdout)
+    matches = [release for page in pages for release in page if release["tag_name"] == tag]
+    if len(matches) > 1:
+        raise SystemExit("Multiple releases use this tag; refusing ambiguous publication.")
+    return matches[0] if matches else None
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
@@ -29,19 +37,24 @@ def main():
         obj = json.loads(gh("api", f"repos/{repo}/git/tags/{obj['sha']}", capture=True).stdout)["object"]
     if obj["type"] != "commit" or obj["sha"] != args.commit:
         raise SystemExit("Release tag does not point to the artifact's source commit.")
-    previous = gh("release", "view", args.tag, "--repo", repo, "--json", "isDraft,targetCommitish", capture=True, check=False)
-    if previous.returncode == 0:
-        existing = json.loads(previous.stdout)
-        if not existing["isDraft"] or existing["targetCommitish"] != args.commit:
+    existing = find_release(repo, args.tag)
+    if existing:
+        if not existing["draft"] or existing["target_commitish"] != args.commit:
             raise SystemExit("An existing published or differently targeted release will not be replaced.")
     else:
-        options = ["--prerelease"] if release_version()["prerelease"] else []
+        config = release_version()
+        options = ["--prerelease"] if config["prerelease"] else []
+        title = f"RT Batching {manifest['version']}" + (" (experimental)" if config["prerelease"] else "")
         gh("release", "create", args.tag, "--repo", repo, "--verify-tag", "--target", args.commit,
-           "--draft", "--title", f"RT Batching {manifest['version']} (experimental)",
+           "--draft", "--title", title,
            "--notes-file", ROOT / "docs" / "RELEASE_NOTES.md", *options)
+        existing = find_release(repo, args.tag)
+        if existing is None:
+            raise SystemExit("Created draft could not be found; refusing publication.")
+    release_endpoint = f"repos/{repo}/releases/{existing['id']}"
     assets = [archive, archive.with_suffix(".zip.sha256")]
     gh("release", "upload", args.tag, *assets, "--repo", repo, "--clobber")
-    release = json.loads(gh("api", f"repos/{repo}/releases/tags/{args.tag}", capture=True).stdout)
+    release = json.loads(gh("api", release_endpoint, capture=True).stdout)
     remote_assets = {a["name"]: a for a in release["assets"]}
     if set(remote_assets) != {p.name for p in assets}:
         raise SystemExit("Draft release has unexpected assets; leaving it unpublished.")
@@ -49,7 +62,10 @@ def main():
         if remote_assets[path.name].get("digest") != "sha256:" + sha(path.read_bytes()):
             raise SystemExit("Uploaded asset digest mismatch; leaving draft unpublished.")
     gh("release", "edit", args.tag, "--repo", repo, "--draft=false")
-    print(release["html_url"])
+    published = json.loads(gh("api", release_endpoint, capture=True).stdout)
+    if published["draft"]:
+        raise SystemExit("Release is still a draft.")
+    print(published["html_url"])
 
 if __name__ == "__main__":
     main()
