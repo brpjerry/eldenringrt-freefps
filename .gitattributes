@@ -1,0 +1,15 @@
+* text=auto eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+*.patch text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.ini text eol=lf
+*.me3 text eol=lf
+# Unified patches contain significant single-space context lines.
+*.patch -whitespace
+# Preserve the formatting of upstream license notices.
+licenses/** -whitespace

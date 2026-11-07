@@ -1,0 +1,6 @@
+Adapter: NVIDIA GeForce RTX 5090
+PASS: 32 batched updates match serial AS serialization byte-for-byte (614400 bytes).
+PASS: nonoverlapping placed resources accepted, alias rejected, destruction re-enables safe allocation.
+PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.
+batch_mode=2 candidates=362 accepted=361 batches=18 multi_batches=13 batched_builds=356 max_batch=32 reject_post=0 reject_resource=1 reject_input=0 reject_scratch=0 reject_mode=0 flush_transition=1 flush_alias=0 flush_dispatch=0 flush_work=16 flush_conflict=1 scratch_mib=16
+PASS: conflict/transition boundaries, scratch reuse, device status; debug_layer=1 errors=0

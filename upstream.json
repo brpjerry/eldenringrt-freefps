@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/crosire/reshade.git",
+  "tag": "v6.8.0",
+  "commit": "18deaa52de0c425a78b329e9cb3c497281cd00ec",
+  "patch": "patches/reshade-v6.8.0-integration.patch",
+  "original_game_tested_sha256": {
+    "ReShade64.asi": "a8609a0b6223b3de1340a2a20b6405f64f10dc4f9a640b77090835283e10d423",
+    "RT-Pass-Probe.addon64": "d4497f004d6841d778a000d98b29a6e7e2c1ae9e5d0642dc5f5ad7341279b969"
+  }
+}

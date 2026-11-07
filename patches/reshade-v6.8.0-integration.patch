@@ -1,0 +1,448 @@
+diff --git a/ReShade.vcxproj b/ReShade.vcxproj
+index 1948e3e..adc493f 100644
+--- a/ReShade.vcxproj
++++ b/ReShade.vcxproj
+@@ -1,4 +1,4 @@
+-﻿<?xml version="1.0" encoding="utf-8"?>
++<?xml version="1.0" encoding="utf-8"?>
+ <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+   <ItemGroup Label="ProjectConfigurations">
+     <ProjectConfiguration Include="Debug|Win32">
+@@ -567,6 +567,7 @@
+     <ClCompile Include="source\d3d11\d3d11_resource.cpp" />
+     <ClCompile Include="source\d3d12\d3d12.cpp" />
+     <ClCompile Include="source\d3d12\d3d12_command_list.cpp" />
++    <ClCompile Include="source\d3d12\er_batch.cpp" />
+     <ClCompile Include="source\d3d12\d3d12_command_queue.cpp" />
+     <ClCompile Include="source\d3d12\d3d12_command_queue_downlevel.cpp" />
+     <ClCompile Include="source\d3d12\d3d12_descriptor_heap.cpp" />
+diff --git a/source/d3d12/d3d12_command_list.cpp b/source/d3d12/d3d12_command_list.cpp
+index 44f3d73..4f8759e 100644
+--- a/source/d3d12/d3d12_command_list.cpp
++++ b/source/d3d12/d3d12_command_list.cpp
+@@ -17,6 +17,7 @@ D3D12GraphicsCommandList::D3D12GraphicsCommandList(D3D12Device *device, ID3D12Gr
+ 	command_list_impl(device, original)
+ {
+ 	assert(_orig != nullptr && _device != nullptr);
++	_er_batch.init(_device, _orig);
+ 
+ #if RESHADE_ADDON
+ 	reshade::invoke_addon_event<reshade::addon_event::init_command_list>(this);
+@@ -67,6 +68,7 @@ bool D3D12GraphicsCommandList::check_and_upgrade_interface(REFIID riid)
+ #endif
+ 			_orig->Release();
+ 			_orig = static_cast<ID3D12GraphicsCommandList *>(new_interface);
++			_er_batch.init(_device, _orig);
+ 			_interface_version = version;
+ 		}
+ 
+@@ -154,6 +156,7 @@ D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE D3D12GraphicsCommandList::GetType()
+ 
+ HRESULT STDMETHODCALLTYPE D3D12GraphicsCommandList::Close()
+ {
++	_er_batch.flush("Close");
+ #if RESHADE_ADDON
+ 	reshade::invoke_addon_event<reshade::addon_event::close_command_list>(this);
+ #endif
+@@ -162,6 +165,7 @@ HRESULT STDMETHODCALLTYPE D3D12GraphicsCommandList::Close()
+ }
+ HRESULT STDMETHODCALLTYPE D3D12GraphicsCommandList::Reset(ID3D12CommandAllocator *pAllocator, ID3D12PipelineState *pInitialState)
+ {
++	_er_batch.reset();
+ #if RESHADE_ADDON
+ 	reshade::invoke_addon_event<reshade::addon_event::reset_command_list>(this);
+ #endif
+@@ -190,6 +194,7 @@ HRESULT STDMETHODCALLTYPE D3D12GraphicsCommandList::Reset(ID3D12CommandAllocator
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearState(ID3D12PipelineState *pPipelineState)
+ {
++	_er_batch.flush("ClearState");
+ 	_orig->ClearState(pPipelineState);
+ 
+ 	_current_root_signature[0] = nullptr;
+@@ -224,6 +229,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearState(ID3D12PipelineState
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
+ {
++	_er_batch.flush("DrawInstanced");
+ #if RESHADE_ADDON
+ 	if (reshade::invoke_addon_event<reshade::addon_event::draw>(this, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation))
+ 		return;
+@@ -232,6 +238,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DrawInstanced(UINT VertexCountP
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation)
+ {
++	_er_batch.flush("DrawIndexedInstanced");
+ #if RESHADE_ADDON
+ 	if (reshade::invoke_addon_event<reshade::addon_event::draw_indexed>(this, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation))
+ 		return;
+@@ -244,10 +251,12 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::Dispatch(UINT ThreadGroupCountX
+ 	if (reshade::invoke_addon_event<reshade::addon_event::dispatch>(this, ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ))
+ 		return;
+ #endif
++	_er_batch.dispatch();
+ 	_orig->Dispatch(ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyBufferRegion(ID3D12Resource *pDstBuffer, UINT64 DstOffset, ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT64 NumBytes)
+ {
++	_er_batch.flush("CopyBufferRegion");
+ #if RESHADE_ADDON >= 2
+ 	assert(pDstBuffer != nullptr && pSrcBuffer != nullptr);
+ 
+@@ -258,6 +267,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyBufferRegion(ID3D12Resource
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *pDst, UINT DstX, UINT DstY, UINT DstZ, const D3D12_TEXTURE_COPY_LOCATION *pSrc, const D3D12_BOX *pSrcBox)
+ {
++	_er_batch.flush("CopyTextureRegion");
+ #if RESHADE_ADDON >= 2
+ 	assert(pDst != nullptr && pSrc != nullptr && pDst->pResource != nullptr && pSrc->pResource != nullptr);
+ 
+@@ -355,6 +365,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyTextureRegion(const D3D12_T
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyResource(ID3D12Resource *pDstResource, ID3D12Resource *pSrcResource)
+ {
++	_er_batch.flush("CopyResource");
+ #if RESHADE_ADDON >= 2
+ 	assert(pDstResource != nullptr && pSrcResource != nullptr);
+ 
+@@ -365,10 +376,12 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyResource(ID3D12Resource *pD
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyTiles(ID3D12Resource *pTiledResource, const D3D12_TILED_RESOURCE_COORDINATE *pTileRegionStartCoordinate, const D3D12_TILE_REGION_SIZE *pTileRegionSize, ID3D12Resource *pBuffer, UINT64 BufferStartOffsetInBytes, D3D12_TILE_COPY_FLAGS Flags)
+ {
++	_er_batch.flush("CopyTiles");
+ 	_orig->CopyTiles(pTiledResource, pTileRegionStartCoordinate, pTileRegionSize, pBuffer, BufferStartOffsetInBytes, Flags);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResolveSubresource(ID3D12Resource *pDstResource, UINT DstSubresource, ID3D12Resource *pSrcResource, UINT SrcSubresource, DXGI_FORMAT Format)
+ {
++	_er_batch.flush("ResolveSubresource");
+ #if RESHADE_ADDON >= 2
+ 	assert(pDstResource != nullptr && pSrcResource != nullptr);
+ 
+@@ -450,6 +463,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetPipelineState(ID3D12Pipeline
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResourceBarrier(UINT NumBarriers, const D3D12_RESOURCE_BARRIER *pBarriers)
+ {
++	_er_batch.barrier(NumBarriers, pBarriers);
+ 	_orig->ResourceBarrier(NumBarriers, pBarriers);
+ 
+ #if RESHADE_ADDON >= 2
+@@ -485,6 +499,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResourceBarrier(UINT NumBarrier
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ExecuteBundle(ID3D12GraphicsCommandList *pCommandList)
+ {
++	_er_batch.flush("ExecuteBundle");
+ 	assert(pCommandList != nullptr);
+ 
+ 	// Get original command list pointer from proxy object
+@@ -841,6 +856,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::OMSetRenderTargets(UINT NumRend
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView, D3D12_CLEAR_FLAGS ClearFlags, FLOAT Depth, UINT8 Stencil, UINT NumRects, const D3D12_RECT *pRects)
+ {
++	_er_batch.flush("ClearDepthStencilView");
+ #if RESHADE_ADDON
+ 	if (reshade::invoke_addon_event<reshade::addon_event::clear_depth_stencil_view>(this, to_handle(DepthStencilView), (ClearFlags & D3D12_CLEAR_FLAG_DEPTH) ? &Depth : nullptr, (ClearFlags & D3D12_CLEAR_FLAG_STENCIL) ? &Stencil : nullptr, NumRects, reinterpret_cast<const reshade::api::rect *>(pRects)))
+ 		return;
+@@ -849,6 +865,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearDepthStencilView(D3D12_CPU
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetView, const FLOAT ColorRGBA[4], UINT NumRects, const D3D12_RECT *pRects)
+ {
++	_er_batch.flush("ClearRenderTargetView");
+ #if RESHADE_ADDON
+ 	if (reshade::invoke_addon_event<reshade::addon_event::clear_render_target_view>(this, to_handle(RenderTargetView), ColorRGBA, NumRects, reinterpret_cast<const reshade::api::rect *>(pRects)))
+ 		return;
+@@ -857,6 +874,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearRenderTargetView(D3D12_CPU
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const UINT Values[4], UINT NumRects, const D3D12_RECT *pRects)
+ {
++	_er_batch.flush("ClearUnorderedAccessViewUint");
+ #if RESHADE_ADDON >= 2
+ 	ViewCPUHandle = _device->convert_to_original_cpu_descriptor_handle(ViewCPUHandle);
+ #endif
+@@ -869,6 +887,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearUnorderedAccessViewUint(D3
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const FLOAT Values[4], UINT NumRects, const D3D12_RECT *pRects)
+ {
++	_er_batch.flush("ClearUnorderedAccessViewFloat");
+ #if RESHADE_ADDON >= 2
+ 	ViewCPUHandle = _device->convert_to_original_cpu_descriptor_handle(ViewCPUHandle);
+ #endif
+@@ -881,10 +900,12 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ClearUnorderedAccessViewFloat(D
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DiscardResource(ID3D12Resource *pResource, const D3D12_DISCARD_REGION *pRegion)
+ {
++	_er_batch.flush("DiscardResource");
+ 	_orig->DiscardResource(pResource, pRegion);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::BeginQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index)
+ {
++	_er_batch.flush("BeginQuery");
+ #if RESHADE_ADDON >= 2
+ 	if (reshade::invoke_addon_event<reshade::addon_event::begin_query>(this, to_handle(pQueryHeap), reshade::d3d12::convert_query_type(Type), Index))
+ 		return;
+@@ -893,6 +914,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::BeginQuery(ID3D12QueryHeap *pQu
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EndQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index)
+ {
++	_er_batch.flush("EndQuery");
+ #if RESHADE_ADDON >= 2
+ 	if (reshade::invoke_addon_event<reshade::addon_event::end_query>(this, to_handle(pQueryHeap), reshade::d3d12::convert_query_type(Type), Index))
+ 		return;
+@@ -901,6 +923,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EndQuery(ID3D12QueryHeap *pQuer
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResolveQueryData(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT StartIndex, UINT NumQueries, ID3D12Resource *pDestinationBuffer, UINT64 AlignedDestinationBufferOffset)
+ {
++	_er_batch.flush("ResolveQueryData");
+ #if RESHADE_ADDON >= 2
+ 	if (const reshade::api::query_type query_type = reshade::d3d12::convert_query_type(Type);
+ 		reshade::invoke_addon_event<reshade::addon_event::copy_query_heap_results>(this, to_handle(pQueryHeap), query_type, StartIndex, NumQueries, to_handle(pDestinationBuffer), AlignedDestinationBufferOffset, reshade::d3d12::get_query_size(query_type).first))
+@@ -910,6 +933,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResolveQueryData(ID3D12QueryHea
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetPredication(ID3D12Resource *pBuffer, UINT64 AlignedBufferOffset, D3D12_PREDICATION_OP Operation)
+ {
++	_er_batch.disable("predication");
+ 	_orig->SetPredication(pBuffer, AlignedBufferOffset, Operation);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetMarker(UINT Metadata, const void *pData, UINT Size)
+@@ -926,6 +950,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EndEvent()
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ExecuteIndirect(ID3D12CommandSignature *pCommandSignature, UINT MaxCommandCount, ID3D12Resource *pArgumentBuffer, UINT64 ArgumentBufferOffset, ID3D12Resource *pCountBuffer, UINT64 CountBufferOffset)
+ {
++	_er_batch.flush("ExecuteIndirect");
+ #if RESHADE_ADDON
+ 	if (reshade::invoke_addon_event<reshade::addon_event::draw_or_dispatch_indirect>(this, reshade::api::indirect_command::unknown, to_handle(pArgumentBuffer), ArgumentBufferOffset, MaxCommandCount, 0))
+ 		return;
+@@ -935,12 +960,14 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ExecuteIndirect(ID3D12CommandSi
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::AtomicCopyBufferUINT(ID3D12Resource *pDstBuffer, UINT64 DstOffset, ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT Dependencies, ID3D12Resource *const *ppDependentResources, const D3D12_SUBRESOURCE_RANGE_UINT64 *pDependentSubresourceRanges)
+ {
++	_er_batch.flush("AtomicCopyBufferUINT");
+ 	assert(_interface_version >= 1);
+ 
+ 	static_cast<ID3D12GraphicsCommandList1 *>(_orig)->AtomicCopyBufferUINT(pDstBuffer, DstOffset, pSrcBuffer, SrcOffset, Dependencies, ppDependentResources, pDependentSubresourceRanges);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::AtomicCopyBufferUINT64(ID3D12Resource *pDstBuffer, UINT64 DstOffset, ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT Dependencies, ID3D12Resource *const *ppDependentResources, const D3D12_SUBRESOURCE_RANGE_UINT64 *pDependentSubresourceRanges)
+ {
++	_er_batch.flush("AtomicCopyBufferUINT64");
+ 	assert(_interface_version >= 1);
+ 
+ 	static_cast<ID3D12GraphicsCommandList1 *>(_orig)->AtomicCopyBufferUINT64(pDstBuffer, DstOffset, pSrcBuffer, SrcOffset, Dependencies, ppDependentResources, pDependentSubresourceRanges);
+@@ -959,6 +986,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetSamplePositions(UINT NumSamp
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResolveSubresourceRegion(ID3D12Resource *pDstResource, UINT DstSubresource, UINT DstX, UINT DstY, ID3D12Resource *pSrcResource, UINT SrcSubresource, D3D12_RECT *pSrcRect, DXGI_FORMAT Format, D3D12_RESOLVE_MODE ResolveMode)
+ {
++	_er_batch.flush("ResolveSubresourceRegion");
+ 	assert(_interface_version >= 1);
+ 
+ #if RESHADE_ADDON >= 2
+@@ -992,6 +1020,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetViewInstanceMask(UINT Mask)
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::WriteBufferImmediate(UINT Count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *pParams, const D3D12_WRITEBUFFERIMMEDIATE_MODE *pModes)
+ {
++	_er_batch.flush("WriteBufferImmediate");
+ 	assert(_interface_version >= 2);
+ 
+ 	static_cast<ID3D12GraphicsCommandList2 *>(_orig)->WriteBufferImmediate(Count, pParams, pModes);
+@@ -1006,6 +1035,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetProtectedResourceSession(ID3
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::BeginRenderPass(UINT NumRenderTargets, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *pRenderTargets, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *pDepthStencil, D3D12_RENDER_PASS_FLAGS Flags)
+ {
++	_er_batch.flush("BeginRenderPass");
+ 	assert(_interface_version >= 4);
+ 
+ #if RESHADE_ADDON
+@@ -1025,6 +1055,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::BeginRenderPass(UINT NumRenderT
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EndRenderPass()
+ {
++	_er_batch.flush("EndRenderPass");
+ 	assert(_interface_version >= 4);
+ 
+ #if RESHADE_ADDON
+@@ -1036,12 +1067,14 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EndRenderPass()
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::InitializeMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pInitializationParametersData, SIZE_T InitializationParametersDataSizeInBytes)
+ {
++	_er_batch.flush("InitializeMetaCommand");
+ 	assert(_interface_version >= 4);
+ 
+ 	static_cast<ID3D12GraphicsCommandList4 *>(_orig)->InitializeMetaCommand(pMetaCommand, pInitializationParametersData, InitializationParametersDataSizeInBytes);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ExecuteMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pExecutionParametersData, SIZE_T ExecutionParametersDataSizeInBytes)
+ {
++	_er_batch.flush("ExecuteMetaCommand");
+ 	assert(_interface_version >= 4);
+ 
+ 	static_cast<ID3D12GraphicsCommandList4 *>(_orig)->ExecuteMetaCommand(pMetaCommand, pExecutionParametersData, ExecutionParametersDataSizeInBytes);
+@@ -1082,10 +1115,12 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::BuildRaytracingAccelerationStru
+ 	}
+ #endif
+ 
++	if (_er_batch.build(pDesc, NumPostbuildInfoDescs)) return;
+ 	static_cast<ID3D12GraphicsCommandList4 *>(_orig)->BuildRaytracingAccelerationStructure(pDesc, NumPostbuildInfoDescs, pPostbuildInfoDescs);
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EmitRaytracingAccelerationStructurePostbuildInfo(const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *pDesc, UINT NumSourceAccelerationStructures, const D3D12_GPU_VIRTUAL_ADDRESS *pSourceAccelerationStructureData)
+ {
++	_er_batch.flush("EmitRaytracingAccelerationStructurePostbuildInfo");
+ 	assert(_interface_version >= 4);
+ 
+ #if RESHADE_ADDON >= 2
+@@ -1114,6 +1149,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::EmitRaytracingAccelerationStruc
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::CopyRaytracingAccelerationStructure(D3D12_GPU_VIRTUAL_ADDRESS DestAccelerationStructureData, D3D12_GPU_VIRTUAL_ADDRESS SourceAccelerationStructureData, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE Mode)
+ {
++	_er_batch.flush("CopyRaytracingAccelerationStructure");
+ 	assert(_interface_version >= 4);
+ #if RESHADE_ADDON >= 2
+ 	if (reshade::invoke_addon_event<reshade::addon_event::copy_acceleration_structure>(
+@@ -1139,6 +1175,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetPipelineState1(ID3D12StateOb
+ }
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DispatchRays(const D3D12_DISPATCH_RAYS_DESC *pDesc)
+ {
++	_er_batch.flush("DispatchRays");
+ 	assert(_interface_version >= 4);
+ 
+ #if RESHADE_ADDON
+@@ -1183,6 +1220,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::RSSetShadingRateImage(ID3D12Res
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DispatchMesh(UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ)
+ {
++	_er_batch.flush("DispatchMesh");
+ 	assert(_interface_version >= 6);
+ 
+ #if RESHADE_ADDON
+@@ -1195,6 +1233,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::DispatchMesh(UINT ThreadGroupCo
+ 
+ void STDMETHODCALLTYPE D3D12GraphicsCommandList::Barrier(UINT32 NumBarrierGroups, const D3D12_BARRIER_GROUP *pBarrierGroups)
+ {
++	_er_batch.disable("enhanced_barrier");
+ 	assert(_interface_version >= 7);
+ 
+ 	static_cast<ID3D12GraphicsCommandList7 *>(_orig)->Barrier(NumBarrierGroups, pBarrierGroups);
+@@ -1284,6 +1323,7 @@ void   STDMETHODCALLTYPE D3D12GraphicsCommandList::SetProgram(const D3D12_SET_PR
+ }
+ void   STDMETHODCALLTYPE D3D12GraphicsCommandList::DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC *pDesc)
+ {
++	_er_batch.flush("DispatchGraph");
+ 	assert(_interface_version >= 10);
+ 
+ 	static_cast<ID3D12GraphicsCommandList10 *>(_orig)->DispatchGraph(pDesc);
+diff --git a/source/d3d12/d3d12_command_list.hpp b/source/d3d12/d3d12_command_list.hpp
+index e09f3de..11253f9 100644
+--- a/source/d3d12/d3d12_command_list.hpp
++++ b/source/d3d12/d3d12_command_list.hpp
+@@ -6,12 +6,14 @@
+ #pragma once
+ 
+ #include "d3d12_impl_command_list.hpp"
++#include "er_batch.hpp"
+ 
+ class D3D12Device;
+ 
+ class DECLSPEC_UUID("479B29E3-9A2C-11D0-B696-00A0C903487A") D3D12GraphicsCommandList final : public ID3D12GraphicsCommandList10, public reshade::d3d12::command_list_impl
+ {
+ public:
++	er_batch::state _er_batch;
+ 	D3D12GraphicsCommandList(D3D12Device *device, ID3D12GraphicsCommandList *original);
+ 	~D3D12GraphicsCommandList();
+ 
+diff --git a/source/d3d12/d3d12_command_queue.cpp b/source/d3d12/d3d12_command_queue.cpp
+index 2b5073e..3033405 100644
+--- a/source/d3d12/d3d12_command_queue.cpp
++++ b/source/d3d12/d3d12_command_queue.cpp
+@@ -180,6 +180,7 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
+ 	// Synchronize access to this command queue while events are invoked and the immediate command list may be accessed
+ 	std::unique_lock<std::recursive_mutex> lock(_mutex);
+ 
++	std::vector<std::shared_ptr<er_batch::arena>> batch_arenas;
+ 	temp_mem<ID3D12CommandList *> command_lists(NumCommandLists);
+ 	for (UINT i = 0; i < NumCommandLists; ++i)
+ 	{
+@@ -194,6 +195,7 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
+ 
+ 			// Get original command list pointer from proxy object
+ 			command_lists[i] = command_list_proxy->_orig;
++			if (auto arena = command_list_proxy->_er_batch.scratch()) batch_arenas.push_back(std::move(arena));
+ 		}
+ 		else
+ 		{
+@@ -207,6 +209,7 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
+ 	lock.unlock();
+ 
+ 	_orig->ExecuteCommandLists(NumCommandLists, command_lists.p);
++	er_batch::submitted(_orig, batch_arenas);
+ }
+ void    STDMETHODCALLTYPE D3D12CommandQueue::SetMarker(UINT Metadata, const void *pData, UINT Size)
+ {
+diff --git a/source/d3d12/d3d12_device.cpp b/source/d3d12/d3d12_device.cpp
+index fab80ad..acbab35 100644
+--- a/source/d3d12/d3d12_device.cpp
++++ b/source/d3d12/d3d12_device.cpp
+@@ -1,3 +1,4 @@
++#include "er_batch.hpp"
+ /*
+  * Copyright (C) 2014 Patrick Mours
+  * SPDX-License-Identifier: BSD-3-Clause OR MIT
+@@ -845,6 +846,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommittedResource(const D3D12_HEAP_
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::committed_resource(resource, HeapFlags);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -903,6 +905,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreatePlacedResource(ID3D12Heap *pHeap, U
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::placed_resource(resource, pHeap, HeapOffset);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -1323,6 +1326,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommittedResource1(const D3D12_HEAP
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::committed_resource(resource, HeapFlags);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -1560,6 +1564,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommittedResource2(const D3D12_HEAP
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::committed_resource(resource, HeapFlags);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -1616,6 +1621,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreatePlacedResource1(ID3D12Heap *pHeap,
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::placed_resource(resource, pHeap, HeapOffset);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -1757,6 +1763,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommittedResource3(const D3D12_HEAP
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::committed_resource(resource, HeapFlags);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -1814,6 +1821,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreatePlacedResource2(ID3D12Heap *pHeap,
+ 			riid == __uuidof(ID3D12Resource2))
+ 		{
+ 			const auto resource = static_cast<ID3D12Resource *>(*ppvResource);
++			er_batch::placed_resource(resource, pHeap, HeapOffset);
+ 
+ 			reshade::hooks::install("ID3D12Resource::GetDevice", reshade::hooks::vtable_from_instance(resource), 7, &ID3D12Resource_GetDevice);
+ 
+@@ -2315,6 +2323,7 @@ void D3D12Device::invoke_init_resource_event(const reshade::api::resource_desc &
+ 
+ 	register_destruction_callback_d3dx(resource, [this, resource]() {
+ 		reshade::invoke_addon_event<reshade::addon_event::destroy_resource>(this, to_handle(resource));
++		er_batch::forget_resource(resource);
+ 		unregister_resource(resource);
+ 	});
+ 

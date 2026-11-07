@@ -1,0 +1,13 @@
+# Standalone offline profile. All mod paths are relative to this file.
+profileVersion = "v1"
+savefile = "rt-batching.sl2"
+start_online = false
+disable_arxan = true
+mem_patch = false
+
+[[supports]]
+game = "elden-ring"
+
+[[natives]]
+path = "ReShade64.asi"
+load_early = true
