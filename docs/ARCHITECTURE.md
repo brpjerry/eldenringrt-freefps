@@ -4,7 +4,9 @@
 
 The add-on recognizes vegetation animation from available pipeline debug names and checks shader-model bytecode. The observed shaders were compute Shader Model 6.0; the eligibility gate allows pre-RayQuery compute models through 6.4. It tags qualifying dispatches for the native runtime. Unknown shaders are conservative boundaries.
 
-The native bridge is resolved from `ReShade64.asi`. Keep this module name: a renamed module or stock ReShade runtime does not supply the required exports.
+The add-on resolves the native bridge from the same ReShade module handle used for add-on registration. It no longer depends on the old `.asi` filename. The packaged runtime is `EldenRingRT.dll`; its initialization treats that filename as a portable native module, keeping settings and add-on discovery beside the DLL. Stock ReShade and renamed older releases lack this initialization change.
+
+The ME3 profile loads the DLL early. Its `config` companion list tells ME3 Manager to copy the add-on, settings, documentation and notices alongside the native DLL when importing the profile. These entries are manager metadata; the runtime still loads `RT-Pass-Probe.addon64` through ReShade's normal add-on mechanism.
 
 ## Eligible refits
 

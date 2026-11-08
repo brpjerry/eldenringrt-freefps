@@ -10,9 +10,8 @@ import struct
 import tomllib
 import zipfile
 from version import ROOT, release_version
+from package_layout import BINARIES, TEMPLATES, validate_profile
 
-BINARIES = ("ReShade64.asi", "RT-Pass-Probe.addon64")
-TEMPLATES = ("README.txt", "ReShade.ini", "RTVegetation.ini", "eldenring-rt-batching.me3")
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -74,11 +73,8 @@ def validate_package(archive, expected_commit=None):
         if sha(members[name]) != manifest["binary_sha256"][name]:
             raise ValueError(f"Manifest binary hash mismatch: {name}")
     profile = tomllib.loads(members["eldenring-rt-batching.me3"].decode())
-    if profile.get("start_online") is not False or profile.get("packages"):
-        raise ValueError("Public profile is not standalone/offline.")
-    if profile["natives"] != [{"path": "ReShade64.asi", "load_early": True}]:
-        raise ValueError("Public profile contains unexpected natives.")
-    if "savefile" in profile or manifest.get("savefile") is not None:
+    validate_profile(profile, ROOT)
+    if manifest.get("savefile") is not None:
         raise ValueError("Public package must not override the game save filename.")
     config = configparser.ConfigParser()
     config.read_string(members["RTVegetation.ini"].decode())

@@ -22,6 +22,21 @@ QUICK INSTALL
    loading, open the generated probe.log in this folder and look for:
      RT batch experiment loaded; interval=1 native bridge=1
 
+ME3 MANAGER
+
+Import this ZIP or the included eldenring-rt-batching.me3 profile. It registers
+EldenRingRT.dll as an early-loading native mod and lists the companion files
+for the manager to copy. RT-Pass-Probe.addon64 is loaded by the runtime.
+If adding the DLL as an external mod manually, keep the whole extracted folder
+together and enable early loading for EldenRingRT.dll.
+
+UPGRADING FROM AN ASI PACKAGE
+
+Extract into a fresh folder and replace the previous RT Batching native entry
+with EldenRingRT.dll. Keep one RT Batching runtime enabled in the profile.
+Versions through 1.0.2 used ReShade64.asi; simply renaming that old binary does
+not provide the DLL loading changes in this release.
+
 REQUIREMENTS AND SCOPE
 
 Windows x64, DirectX 12, an RT-capable GPU, Elden Ring, Steam, and ME3.
@@ -55,7 +70,7 @@ vegetation's RT representation lag by one frame. BatchMode=2 enables batching;
 
 OPTIONAL RESHADE EFFECTS
 
-The included ReShade64.asi is a custom ReShade 6.8.0 runtime with the batching
+The included EldenRingRT.dll is a custom ReShade 6.8.0 runtime with the batching
 hooks. Keep that filename and binary. A stock ReShade runtime lacks these hooks.
 Do not overwrite it or install a second ReShade dxgi.dll alongside this runtime.
 

@@ -8,5 +8,38 @@ mem_patch = false
 game = "elden-ring"
 
 [[natives]]
-path = "ReShade64.asi"
+path = "EldenRingRT.dll"
 load_early = true
+
+# ME3 Manager copies these files beside the native DLL during profile import.
+config = [
+    "LICENSE",
+    "README.txt",
+    "RT-Pass-Probe.addon64",
+    "RTVegetation.ini",
+    "ReShade.ini",
+    "SHA256SUMS.txt",
+    "THIRD_PARTY.md",
+    "eldenring-rt-batching.me3",
+    "licenses/Mason-Petrosky-MIT.txt",
+    "licenses/ReShade-LICENSE.txt",
+    "licenses/deps/d3d12/LICENSE",
+    "licenses/deps/d3d12on7/LICENSE.txt",
+    "licenses/deps/d3d911on12/LICENSE.txt",
+    "licenses/deps/glad/LICENSE",
+    "licenses/deps/imgui/LICENSE.txt",
+    "licenses/deps/imgui/examples/libs/glfw/COPYING.txt",
+    "licenses/deps/jxl_simple_lossless/LICENSE",
+    "licenses/deps/minhook/LICENSE.txt",
+    "licenses/deps/openvr/LICENSE",
+    "licenses/deps/openxr/COPYING.adoc",
+    "licenses/deps/openxr/LICENSE",
+    "licenses/deps/openxr/src/external/jnipp/LICENSE",
+    "licenses/deps/openxr/src/external/jsoncpp/LICENSE",
+    "licenses/deps/spirv/LICENSE",
+    "licenses/deps/stb/LICENSE",
+    "licenses/deps/stb/data/herringbone/license.txt",
+    "licenses/deps/utfcpp/LICENSE",
+    "licenses/deps/vma/LICENSE.txt",
+    "manifest.json",
+]

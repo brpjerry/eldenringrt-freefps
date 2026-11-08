@@ -28,3 +28,7 @@ The original output is retained in [original-gpu-test.txt](original-gpu-test.txt
 Publication preparation verified the pinned integration patch on a fresh checkout, source/package hygiene, and packaging with the original tested binaries. The first local full build was interrupted during native compilation. The GitHub Actions workflow now records fresh compilation, CPU-policy and package checks separately; a hosted CI pass does not imply a new GPU or in-game test pass.
 
 A successful build or standalone test does not prove that a newly built runtime is interchangeable in every game scene. Record compiler/SDK versions, run the test, and perform an offline in-game smoke test before publishing changed binaries. The public package manifest distinguishes original tested hashes from rebuilt artifacts.
+
+## DLL loading integration test
+
+Starting with 1.0.3, CI also executes `runtime_load_test.exe` against the built DLL and add-on using the D3D12 WARP software adapter. The host executable is outside the package directory and has no ReShade configuration. The test checks DLL-local settings, all batching exports, automatic add-on discovery, native bridge activation, and the D3D12 device callback. This is a loading test; it does not validate DXR correctness, in-game visuals, or the ME3 Manager GUI.

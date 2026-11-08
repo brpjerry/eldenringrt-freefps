@@ -75,6 +75,7 @@ jobs:
             build/*.log
             build/*results.txt
             build/build-info.json
+            build/runtime-load-smoke/*.log
           if-no-files-found: ignore
           retention-days: 14
 

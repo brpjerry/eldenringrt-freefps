@@ -10,11 +10,10 @@ import tomllib
 import zipfile
 from version import release_version
 from verify_package import validate_package
+from package_layout import BINARIES, TEMPLATES, validate_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = json.loads((ROOT / "upstream.json").read_text(encoding="utf-8"))
-BINARIES = ("ReShade64.asi", "RT-Pass-Probe.addon64")
-TEMPLATES = ("README.txt", "ReShade.ini", "RTVegetation.ini", "eldenring-rt-batching.me3")
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -38,12 +37,7 @@ def main():
         if path.is_file():
             members[path.relative_to(ROOT).as_posix()] = path.read_bytes()
     profile = tomllib.loads(members["eldenring-rt-batching.me3"].decode())
-    if profile.get("start_online") is not False or profile.get("packages"):
-        raise SystemExit("Public profile must be offline and contain no other packages.")
-    if profile["natives"] != [{"path": "ReShade64.asi", "load_early": True}]:
-        raise SystemExit("Unexpected public native list.")
-    if "savefile" in profile:
-        raise SystemExit("Public profile must use the normal game save without an override.")
+    validate_profile(profile, ROOT)
     original = hashes == PIN["original_game_tested_sha256"]
     manifest = {
         "name": "Elden Ring RT Batching", "version": version,

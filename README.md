@@ -10,6 +10,8 @@ The project consists of a ReShade add-on and a small native integration patch ag
 
 Download the portable ZIP from [Releases](https://github.com/brpjerry/eldenringrt-freefps/releases), extract it into a writable folder outside the game's `Game` directory, and double-click `eldenring-rt-batching.me3` after installing [ME3](https://github.com/garyttierney/me3/releases/latest). The profile runs offline and uses the game's normal save file (`ER0000.sl2`), with no savefile override. Enable ray tracing in the game and reload your character after changing RT.
 
+For ME3 Manager, import the ZIP or its `.me3` profile. The native entry is `EldenRingRT.dll` with early loading enabled; the profile also lists its companion files so the manager copies the complete mod.
+
 See [the installation instructions](package/README.txt) for save handling, optional ReShade effects, configuration and removal. The published package contains no CMD/PowerShell launchers or live-control scripts. It does not unlock the game's FPS cap.
 
 ## Build from source
@@ -46,6 +48,6 @@ This is an unofficial modified ReShade build. Use the offline profile with EAC d
 
 ## CI and releases
 
-Pull requests and pushes to main build the x64 runtime and tests on Windows, run CPU-only policy checks, and upload a verified portable ZIP. Tags matching `version.json` publish an experimental release after the build succeeds. The hosted runner compiles the DXR test but cannot run it or the game. See [BUILDING.md](BUILDING.md#ci-and-releases).
+Pull requests and pushes to main build the x64 runtime and tests on Windows, run CPU policy checks and a D3D12 WARP loading test, and upload a verified portable ZIP. Tags matching `version.json` publish an experimental release after the build succeeds. The hosted runner compiles the DXR test but cannot run it or the game. See [BUILDING.md](BUILDING.md#ci-and-releases).
 
 New project code is licensed under [BSD 3-Clause](LICENSE). ReShade and the borrowed profiler retain their own notices; see [THIRD_PARTY.md](THIRD_PARTY.md).

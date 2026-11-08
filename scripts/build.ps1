@@ -46,7 +46,7 @@ if($Target -in 'All','Native'){
             '/p:Configuration=Release','/p:Platform=x64','/p:PlatformToolset=v143',
             "/p:WindowsTargetPlatformVersion=$SdkVersion",'/p:GladReproducible=true',
             "/p:SolutionDir=$upstream\",'/verbosity:minimal') (Join-Path $build 'native-build.log')
-        Copy-Item -LiteralPath (Join-Path $upstream 'bin\x64\Release\ReShade64.dll') -Destination (Join-Path $bin 'ReShade64.asi')
+        Copy-Item -LiteralPath (Join-Path $upstream 'bin\x64\Release\ReShade64.dll') -Destination (Join-Path $bin 'EldenRingRT.dll')
     } finally {Pop-Location; $env:PATH=$savedPath}
 }
 if($Target -in 'All','Addon'){
@@ -74,11 +74,26 @@ if($Target -in 'All','Test'){
             '/Fevegetation_policy_test.exe') (Join-Path $build 'policy-build.log')
         Invoke-Logged (Join-Path $tests 'vegetation_policy_test.exe') @() (Join-Path $build 'policy-test-results.txt')
         Get-Content -LiteralPath (Join-Path $build 'policy-test-results.txt')
+        Invoke-Logged $cl @('/nologo','/std:c++20','/EHsc','/W4','/MT','/O2',
+            (Join-Path $repo 'tests\runtime_load_test.cpp'),'/Feruntime_load_test.exe',
+            '/link','user32.lib','d3d12.lib','dxgi.lib') (Join-Path $build 'runtime-load-build.log')
         if($RunGpuTests){
             Invoke-Logged (Join-Path $tests 'native_batch_test.exe') @() (Join-Path $build 'gpu-test-results.txt')
             Get-Content -LiteralPath (Join-Path $build 'gpu-test-results.txt')
         }
     } finally {Pop-Location}
+}
+if($Target -eq 'All'){
+    $smoke=Join-Path $build 'runtime-load-smoke'
+    $null=New-Item -ItemType Directory -Force -Path $smoke
+    foreach($name in @('EldenRingRT.dll','RT-Pass-Probe.addon64')){
+        Copy-Item -LiteralPath (Join-Path $bin $name) -Destination (Join-Path $smoke $name)
+    }
+    foreach($name in @('ReShade.ini','RTVegetation.ini')){
+        Copy-Item -LiteralPath (Join-Path $repo ('package\'+$name)) -Destination (Join-Path $smoke $name)
+    }
+    Invoke-Logged (Join-Path $tests 'runtime_load_test.exe') @((Join-Path $smoke 'EldenRingRT.dll')) (Join-Path $build 'runtime-load-test-results.txt')
+    Get-Content -LiteralPath (Join-Path $build 'runtime-load-test-results.txt')
 }
 $sourceCommit=(& git -C $repo rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0){throw 'Cannot identify source commit.'}
@@ -91,6 +106,7 @@ if($LASTEXITCODE -ne 0){throw 'Cannot identify source commit.'}
     addon_sdk=$env:WindowsSDKVersion
     compiler_workers=$Jobs
     cpu_policy_test_run=($Target -in 'All','Test')
+    runtime_load_test_run=($Target -eq 'All')
     gpu_test_run=([bool]$RunGpuTests -and $Target -in 'All','Test')
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $build 'build-info.json') -Encoding UTF8
 Write-Output "Built $Target. Outputs are under build/. No game files were changed."

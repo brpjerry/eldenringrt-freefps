@@ -288,7 +288,7 @@ BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
         std::wstring path(32768,L'\0');
         const auto length=GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
         path.resize(length);folder=fs::path(path).parent_path();
-        if(auto runtime=GetModuleHandleW(L"ReShade64.asi")) {
+        if(auto runtime=reshade::internal::get_reshade_module_handle()) {
             batch_tag=reinterpret_cast<BatchTagFn>(GetProcAddress(runtime,"ERBatchTag"));
             batch_control=reinterpret_cast<BatchControlFn>(GetProcAddress(runtime,"ERBatchControl"));
             batch_status=reinterpret_cast<BatchStatusFn>(GetProcAddress(runtime,"ERBatchStatus"));

@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import tomllib
+from package_layout import validate_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,12 +44,10 @@ def main():
         if path.is_file() and path.suffix.lower() in {".cmd", ".ps1", ".bat"}:
             errors.append(f"Player package contains a script: {path.name}")
     profile = tomllib.loads((ROOT / "package" / "eldenring-rt-batching.me3").read_text(encoding="utf-8"))
-    if profile["natives"] != [{"path": "ReShade64.asi", "load_early": True}] or profile.get("packages"):
-        errors.append("Public profile has unexpected mods.")
-    if profile.get("start_online") is not False:
-        errors.append("Public profile is not offline.")
-    if "savefile" in profile:
-        errors.append("Public profile must not override the game save filename.")
+    try:
+        validate_profile(profile, ROOT)
+    except ValueError as error:
+        errors.append(str(error))
     pin = json.loads((ROOT / "upstream.json").read_text(encoding="utf-8"))
     patch = (ROOT / pin["patch"]).read_text(encoding="utf-8")
     if "new file mode" in patch:

@@ -1,10 +1,12 @@
-RT Batching 1.0.2 removes the custom save filename from the standalone ME3 profile.
+RT Batching 1.0.3 adds a native DLL package for ME3 Manager.
 
-- The public profile now uses Elden Ring's normal `ER0000.sl2` save, with no `savefile` override.
-- Installation and removal instructions describe the normal save behavior. Existing custom saves are not moved, deleted or merged automatically.
-- Packaging and CI reject a save override in the public profile and record the absence of an override in the manifest.
-- Batching remains enabled with every-frame vegetation updates. The profile runs offline.
+- Load `EldenRingRT.dll` through ME3. The bundled profile enables early loading and lists every companion file for ME3 Manager to import.
+- The custom runtime locates settings and its add-on beside the DLL. The add-on resolves the batching bridge from the active ReShade module rather than the old ASI filename.
+- CI loads the actual runtime and companion add-on in a separate test process using D3D12 WARP, checking settings, exports and bridge activation.
+- Every-frame batching remains the default. The profile runs offline and has no custom save filename.
 
-Download and extract the portable ZIP, then launch `eldenring-rt-batching.me3`. See README.txt for installation. The ZIP contains no launch/toggle scripts, other mods, saves or captured shaders.
+To upgrade, extract the ZIP into a fresh folder and replace the previous RT Batching entry with `EldenRingRT.dll`. Keep one runtime enabled. Old releases cannot acquire these loading changes by renaming their ASI file.
 
-This is an experimental CI-built release. The Windows build, CPU tests and package verification run in CI; the DXR GPU test is compiled but not run. These rebuilt binaries have not received a new in-game test.
+Import the ZIP or `eldenring-rt-batching.me3` in ME3 Manager, or launch the included profile directly. Keep the companion add-on and settings together with the DLL. See README.txt for details.
+
+Experimental release: compilation, CPU tests, WARP loading and package checks run in CI. The DXR test is compiled but not run, and no new in-game test is claimed.
