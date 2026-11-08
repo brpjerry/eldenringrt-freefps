@@ -8,7 +8,7 @@ The project consists of a ReShade add-on and a small native integration patch ag
 
 ## Install the packaged mod
 
-Download the portable ZIP from [Releases](https://github.com/brpjerry/eldenringrt-freefps/releases), extract it into a writable folder outside the game's `Game` directory, and double-click `eldenring-rt-batching.me3` after installing [ME3](https://github.com/garyttierney/me3/releases/latest). The profile runs offline and uses a separate `rt-batching.sl2` save. Enable ray tracing in the game and reload your character after changing RT.
+Download the portable ZIP from [Releases](https://github.com/brpjerry/eldenringrt-freefps/releases), extract it into a writable folder outside the game's `Game` directory, and double-click `eldenring-rt-batching.me3` after installing [ME3](https://github.com/garyttierney/me3/releases/latest). The profile runs offline and uses the game's normal save file (`ER0000.sl2`), with no savefile override. Enable ray tracing in the game and reload your character after changing RT.
 
 See [the installation instructions](package/README.txt) for save handling, optional ReShade effects, configuration and removal. The published package contains no CMD/PowerShell launchers or live-control scripts. It does not unlock the game's FPS cap.
 

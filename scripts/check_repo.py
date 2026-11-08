@@ -47,6 +47,8 @@ def main():
         errors.append("Public profile has unexpected mods.")
     if profile.get("start_online") is not False:
         errors.append("Public profile is not offline.")
+    if "savefile" in profile:
+        errors.append("Public profile must not override the game save filename.")
     pin = json.loads((ROOT / "upstream.json").read_text(encoding="utf-8"))
     patch = (ROOT / pin["patch"]).read_text(encoding="utf-8")
     if "new file mode" in patch:

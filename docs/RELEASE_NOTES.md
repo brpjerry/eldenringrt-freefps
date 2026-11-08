@@ -1,11 +1,10 @@
-First experimental release of Elden Ring RT Batching.
+RT Batching 1.0.2 removes the custom save filename from the standalone ME3 profile.
 
-- Batches eligible independent vegetation BLAS refits using a modified ReShade 6.8.0 runtime.
-- Preserves every-frame vegetation updates and the selected ray-tracing quality by default.
-- Includes a standalone offline ME3 profile, settings, installation instructions and license notices.
-- The portable ZIP contains no CMD/PowerShell scripts, other mods, saves or captured game shaders. Launch the included .me3 profile after installing ME3.
-- Includes ZIP/member SHA-256 checksums and a manifest identifying the source commit and binary hashes.
+- The public profile now uses Elden Ring's normal `ER0000.sl2` save, with no `savefile` override.
+- Installation and removal instructions describe the normal save behavior. Existing custom saves are not moved, deleted or merged automatically.
+- Packaging and CI reject a save override in the public profile and record the absence of an override in the manifest.
+- Batching remains enabled with every-frame vegetation updates. The profile runs offline.
 
-Validation: GitHub Actions builds the x64 runtime, add-on and standalone GPU test, runs CPU-only vegetation-policy checks, and verifies the complete portable archive. Hosted CI does not execute the DXR GPU test or launch Elden Ring. These newly compiled binaries are not the exact original in-game-tested hashes; the original RTX 5090 measurements and GPU correctness results are historical evidence for the implementation, not a new in-game test of this release.
+Download and extract the portable ZIP, then launch `eldenring-rt-batching.me3`. See README.txt for installation. The ZIP contains no launch/toggle scripts, other mods, saves or captured shaders.
 
-This release is experimental. It does not unlock the FPS cap. See README.txt in the ZIP for installation, save-file behavior, optional ReShade effects and limitations.
+This is an experimental CI-built release. The Windows build, CPU tests and package verification run in CI; the DXR GPU test is compiled but not run. These rebuilt binaries have not received a new in-game test.

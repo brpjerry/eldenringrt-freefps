@@ -42,6 +42,8 @@ def main():
         raise SystemExit("Public profile must be offline and contain no other packages.")
     if profile["natives"] != [{"path": "ReShade64.asi", "load_early": True}]:
         raise SystemExit("Unexpected public native list.")
+    if "savefile" in profile:
+        raise SystemExit("Public profile must use the normal game save without an override.")
     original = hashes == PIN["original_game_tested_sha256"]
     manifest = {
         "name": "Elden Ring RT Batching", "version": version,
@@ -50,7 +52,7 @@ def main():
         "binary_sha256": hashes, "matches_original_game_tested_binaries": original,
         "launch_entry": "eldenring-rt-batching.me3", "includes_control_scripts": False,
         "default": {"batch_mode": 2, "update_interval": 1},
-        "savefile": profile["savefile"],
+        "savefile": profile.get("savefile"),
         "validation_note": "Original in-game results apply only to the recorded original hashes.",
     }
     build_info = args.binaries.parent / "build-info.json"

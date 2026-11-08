@@ -35,13 +35,11 @@ This package includes no other gameplay mods, shaders, presets, or save files.
 
 SAVES
 
-This standalone profile uses rt-batching.sl2 in the game's normal save folder.
-ME3 copies an existing base save to that name when it does not already exist.
-Subsequent progress stays in that separate save; it does not sync back to the
-base save or to another mod profile. Back up saves before changing profiles.
-To deliberately use an existing ME3 save, edit only the savefile value in the
-profile to its filename while the game is closed. No account ID or absolute
-save path belongs in this profile. No saves are modified by installation.
+This profile does not override the save filename. Elden Ring uses its normal
+ER0000.sl2 save in the normal save directory.
+If upgrading from a profile that used rt-batching.sl2 or another custom save,
+progress in that file is not automatically merged into the normal save.
+Installation does not move, rename or delete any existing save files.
 
 CONFIGURATION
 
@@ -106,8 +104,8 @@ TROUBLESHOOTING AND REMOVAL
   and BatchMode=2 in RTVegetation.ini. A 60 FPS cap can hide gains above 60.
 - Read probe.log and ReShade.log for loading errors. If adding effects, first
   try with those effects disabled. Quit normally before replacing files.
-- To uninstall, close the game and delete this extracted folder. The separate
-  save remains in the normal save directory. Launch your usual profile or
+- To uninstall, close the game and delete this extracted folder. Existing
+  game saves remain in the normal save directory. Launch your usual profile or
   Steam afterward. No game executables or global settings are replaced here.
 
 PROVENANCE AND NOTICES

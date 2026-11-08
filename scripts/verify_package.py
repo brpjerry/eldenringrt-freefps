@@ -78,6 +78,8 @@ def validate_package(archive, expected_commit=None):
         raise ValueError("Public profile is not standalone/offline.")
     if profile["natives"] != [{"path": "ReShade64.asi", "load_early": True}]:
         raise ValueError("Public profile contains unexpected natives.")
+    if "savefile" in profile or manifest.get("savefile") is not None:
+        raise ValueError("Public package must not override the game save filename.")
     config = configparser.ConfigParser()
     config.read_string(members["RTVegetation.ini"].decode())
     if config.getint("Settings", "UpdateInterval") != 1 or config.getint("Settings", "BatchMode") != 2:
