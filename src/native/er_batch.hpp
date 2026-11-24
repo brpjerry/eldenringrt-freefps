@@ -20,7 +20,9 @@ public:
     void tag(unsigned flags);
     void reset();
     void dispatch();
-    void barrier(UINT, const D3D12_RESOURCE_BARRIER *);
+    // Returns true when the call was consumed or replaced; the caller must
+    // then skip the original ResourceBarrier.
+    bool barrier(UINT, const D3D12_RESOURCE_BARRIER *);
     void flush(const char *reason);
     void disable(const char *reason);
     bool build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *, UINT post_count);

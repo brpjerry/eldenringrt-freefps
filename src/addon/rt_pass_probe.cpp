@@ -39,6 +39,7 @@ BatchControlFn batch_control=nullptr;
 BatchStatusFn batch_status=nullptr;
 BatchTickFn batch_tick=nullptr;
 BatchTraceFn batch_trace=nullptr;
+BatchControlFn batch_overlap=nullptr;
 bool LegacyBytecode(const shader_desc& shader) {
     // DXBC SHDR/SHEX shader-model <=5 compute cannot read acceleration structures.
     const auto* b=static_cast<const unsigned char*>(shader.code);
@@ -262,6 +263,10 @@ void Present(command_queue* queue,swapchain*,const rect*,const rect*,uint32_t,co
         unsigned value=99;input>>value;
         if(!batch_control || value>2 || profiler.armed())reply="Batch mode rejected";
         else {batch_control(value);reply="Batch mode="+std::to_string(value);}
+    } else if(verb=="overlap") {
+        unsigned value=99;input>>value;
+        if(!batch_overlap || value>1 || profiler.armed())reply="Overlap rejected";
+        else {batch_overlap(value);reply="Animation overlap="+std::to_string(value);}
     } else if(verb=="batchstatus") {
         char buffer[2048]={};if(batch_status)batch_status(buffer,sizeof(buffer));reply=buffer;
     } else if(verb=="batchaudit") {
@@ -294,11 +299,14 @@ BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
             batch_status=reinterpret_cast<BatchStatusFn>(GetProcAddress(runtime,"ERBatchStatus"));
             batch_tick=reinterpret_cast<BatchTickFn>(GetProcAddress(runtime,"ERBatchTick"));
             batch_trace=reinterpret_cast<BatchTraceFn>(GetProcAddress(runtime,"ERBatchTrace"));
+            batch_overlap=reinterpret_cast<BatchControlFn>(GetProcAddress(runtime,"ERBatchOverlap"));
         }
         if(batch_control)batch_control(GetPrivateProfileIntW(L"Settings",L"BatchMode",1,(folder/L"RTVegetation.ini").c_str()));
+        if(batch_overlap)batch_overlap(GetPrivateProfileIntW(L"Settings",L"AnimationOverlap",1,(folder/L"RTVegetation.ini").c_str())?1:0);
         const auto configured=GetPrivateProfileIntW(L"Settings",L"UpdateInterval",1,(folder/L"RTVegetation.ini").c_str());
         interval=configured>=1 && configured<=4?configured:1;
-        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr));
+        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr)
+            +" overlap="+std::to_string(batch_overlap?batch_overlap(99):0));
 #define ON(event,fn) reshade::register_event<reshade::addon_event::event>(fn)
         ON(init_device,InitDevice);ON(destroy_device,DestroyDevice);ON(init_command_list,InitList);
         ON(destroy_command_list,DestroyList);ON(reset_command_list,ResetList);ON(close_command_list,CloseList);

@@ -68,7 +68,7 @@ if($Target -in 'All','Test'){
             "/I$repo\src\native","/I$repo\tests",
             (Join-Path $repo 'tests\native_batch_test.cpp'),
             (Join-Path $repo 'src\native\er_batch.cpp'),'/Fenative_batch_test.exe',
-            '/link','user32.lib','d3d12.lib','dxgi.lib') (Join-Path $build 'test-build.log')
+            '/link','user32.lib','d3d12.lib','dxgi.lib','d3dcompiler.lib') (Join-Path $build 'test-build.log')
         Invoke-Logged $cl @('/nologo','/std:c++20','/EHsc','/W4','/MT','/O2',
             "/I$repo\src\addon",(Join-Path $repo 'tests\vegetation_policy_test.cpp'),
             '/Fevegetation_policy_test.exe') (Join-Path $build 'policy-build.log')
