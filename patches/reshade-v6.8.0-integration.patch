@@ -122,9 +122,8 @@ index 44f3d73..4f8759e 100644
  }
  void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResourceBarrier(UINT NumBarriers, const D3D12_RESOURCE_BARRIER *pBarriers)
  {
--	_orig->ResourceBarrier(NumBarriers, pBarriers);
-+	if (!_er_batch.barrier(NumBarriers, pBarriers))
-+		_orig->ResourceBarrier(NumBarriers, pBarriers);
++	_er_batch.barrier(NumBarriers, pBarriers);
+ 	_orig->ResourceBarrier(NumBarriers, pBarriers);
  
  #if RESHADE_ADDON >= 2
 @@ -485,6 +499,7 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::ResourceBarrier(UINT NumBarrier

@@ -5,7 +5,6 @@
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include "er_batch.hpp"
 #include "er_batch_test_device.hpp"
@@ -18,7 +17,6 @@
 using Microsoft::WRL::ComPtr;
 extern "C" unsigned ERBatchControl(unsigned);
 extern "C" void ERBatchStatus(char*,unsigned);
-extern "C" unsigned ERBatchOverlap(unsigned);
 void check(HRESULT hr){if(FAILED(hr))throw std::runtime_error("D3D12 failure "+std::to_string(static_cast<unsigned>(hr)));}
 uint64_t aligned(uint64_t n){return (n+255)&~255ull;}
 void uav(ID3D12GraphicsCommandList*l){D3D12_RESOURCE_BARRIER b={};b.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;l->ResourceBarrier(1,&b);}
@@ -120,7 +118,7 @@ int main(){try{
     update(0);update(1);update(0);auto repeated=snapshot();if(reference!=repeated)throw std::runtime_error("Repeated destination mismatch");
     // An input transition must flush while the buffer is still readable.
     update(0);update(1);transition.Transition.pResource=input.Get();transition.Transition.StateBefore=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;transition.Transition.StateAfter=D3D12_RESOURCE_STATE_COPY_SOURCE;
-    if(!batch.barrier(1,&transition))list->ResourceBarrier(1,&transition);std::swap(transition.Transition.StateBefore,transition.Transition.StateAfter);if(!batch.barrier(1,&transition))list->ResourceBarrier(1,&transition);
+    batch.barrier(1,&transition);list->ResourceBarrier(1,&transition);std::swap(transition.Transition.StateBefore,transition.Transition.StateAfter);batch.barrier(1,&transition);list->ResourceBarrier(1,&transition);
     batch.tag(0);batch.dispatch();update(2);submit();
     for(unsigned n=0;n<10;++n){for(unsigned i=0;i<count;++i)update(i);submit();}
     // Hold an actual GPU submission behind a CPU-controlled fence. Releasing
@@ -147,58 +145,6 @@ int main(){try{
     check(device->GetDeviceRemovedReason());second_batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));
     if(reference!=snapshot())throw std::runtime_error("Deferred scratch serialization mismatch");
     std::cout<<"PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.\n";
-    // Bugs caught: 0, False positives: 0
-    // Animation overlap: reproduce the game's per-object sequence (read->UAV
-    // transition, animation dispatch writing that object's vertex buffer,
-    // UAV->read transition, in-place refit, UAV barriers on scratch and BLAS).
-    // With batching and overlap the barriers are held, dropped or replaced by
-    // enhanced barriers; the refit results must still match serial execution.
-    {
-        const char*hlsl="ByteAddressBuffer src:register(t0);RWByteAddressBuffer dst:register(u0);"
-            "cbuffer c:register(b0){uint lift;uint words;};"
-            "[numthreads(64,1,1)]void main(uint i:SV_DispatchThreadID){if(i>=words)return;"
-            "float v=asfloat(src.Load(i*4));if(i%3==2)v+=asfloat(lift);else if(i%3==0)v+=asfloat(lift)*0.25;dst.Store(i*4,asuint(v));}";
-        ComPtr<ID3DBlob> code,errors_blob;
-        check(D3DCompile(hlsl,std::strlen(hlsl),"animate",nullptr,nullptr,"main","cs_5_0",0,0,&code,&errors_blob));
-        D3D12_ROOT_PARAMETER params[3]={};
-        params[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;params[0].Constants={0,0,2};
-        params[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;params[1].Descriptor={0,0};
-        params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;params[2].Descriptor={0,0};
-        D3D12_ROOT_SIGNATURE_DESC rsd={3,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};
-        ComPtr<ID3DBlob> rs_blob;check(D3D12SerializeRootSignature(&rsd,D3D_ROOT_SIGNATURE_VERSION_1,&rs_blob,&errors_blob));
-        ComPtr<ID3D12RootSignature> root;check(device->CreateRootSignature(0,rs_blob->GetBufferPointer(),rs_blob->GetBufferSize(),IID_PPV_ARGS(&root)));
-        D3D12_COMPUTE_PIPELINE_STATE_DESC cpd={};cpd.pRootSignature=root.Get();cpd.CS={code->GetBufferPointer(),code->GetBufferSize()};
-        ComPtr<ID3D12PipelineState> animate;check(device->CreateComputePipelineState(&cpd,IID_PPV_ARGS(&animate)));
-        constexpr D3D12_RESOURCE_STATES read=D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        std::vector<ComPtr<ID3D12Resource>> animated(count);
-        for(auto&b:animated){b=buffer(device.Get(),vertices.size()*4,D3D12_HEAP_TYPE_DEFAULT,read,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);adapter_device.buffers.push_back(b.Get());}
-        auto issue=[&](const D3D12_RESOURCE_BARRIER&b){if(!batch.barrier(1,&b))list->ResourceBarrier(1,&b);};
-        auto frame=[&](unsigned generation){
-            list->SetComputeRootSignature(root.Get());list->SetPipelineState(animate.Get());
-            for(unsigned i=0;i<count;++i){
-                D3D12_RESOURCE_BARRIER t={};t.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;t.Transition.pResource=animated[i].Get();
-                t.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;t.Transition.StateBefore=read;t.Transition.StateAfter=D3D12_RESOURCE_STATE_UNORDERED_ACCESS;issue(t);
-                const float lift=0.01f*float(i+1)+0.5f*float(generation);UINT constants[2];std::memcpy(&constants[0],&lift,4);constants[1]=UINT(vertices.size());
-                list->SetComputeRoot32BitConstants(0,2,constants,0);list->SetComputeRootShaderResourceView(1,input->GetGPUVirtualAddress());
-                list->SetComputeRootUnorderedAccessView(2,animated[i]->GetGPUVirtualAddress());
-                batch.tag(1);batch.dispatch();list->Dispatch(UINT((vertices.size()+63)/64),1,1);
-                std::swap(t.Transition.StateBefore,t.Transition.StateAfter);issue(t);
-                D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d={};d.Inputs=inputs;auto g=geometry;g.Triangles.VertexBuffer.StartAddress=animated[i]->GetGPUVirtualAddress();
-                d.Inputs.pGeometryDescs=&g;d.Inputs.Flags|=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
-                d.DestAccelerationStructureData=d.SourceAccelerationStructureData=addresses[i];d.ScratchAccelerationStructureData=scratch->GetGPUVirtualAddress();
-                batch.tag(0x101);if(!batch.build(&d,0))list->BuildRaytracingAccelerationStructure(&d,0,nullptr);
-                D3D12_RESOURCE_BARRIER u={};u.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;u.UAV.pResource=scratch.Get();issue(u);u.UAV.pResource=result.Get();issue(u);
-            }};
-        ERBatchControl(0);ERBatchOverlap(1);frame(0);frame(1);auto serial_animated=snapshot();
-        for(unsigned i=0;i<count;++i)update(i);submit(); // restore the static geometry before the batched pass
-        ERBatchControl(0);frame(0);submit();
-        ERBatchControl(2);ERBatchOverlap(1);frame(1);auto overlapped=snapshot();
-        if(serial_animated!=overlapped)throw std::runtime_error("Animation overlap result differs from serial execution");
-        char overlap_status[2048];ERBatchStatus(overlap_status,sizeof(overlap_status));
-        const std::string text(overlap_status);
-        if(text.find(" held=0")!=std::string::npos || text.find(" dropped_uav=0")!=std::string::npos)throw std::runtime_error("Overlap path was not exercised: "+text);
-        std::cout<<"PASS: animation overlap (held/dropped/enhanced barriers) matches serial refits byte-for-byte.\n";
-    }
     char status[2048];ERBatchStatus(status,sizeof(status));std::cout<<status<<"\n";
     size_t errors=0;if(info){for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size=0;info->GetMessage(i,nullptr,&size);std::vector<unsigned char> storage(size);auto*msg=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         info->GetMessage(i,msg,&size);if(msg->Severity<=D3D12_MESSAGE_SEVERITY_ERROR){++errors;std::cerr<<msg->pDescription<<"\n";}}}
