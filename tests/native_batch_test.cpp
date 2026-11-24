@@ -17,6 +17,7 @@
 using Microsoft::WRL::ComPtr;
 extern "C" unsigned ERBatchControl(unsigned);
 extern "C" void ERBatchStatus(char*,unsigned);
+extern "C" unsigned ERBatchBuildPreference(unsigned);
 void check(HRESULT hr){if(FAILED(hr))throw std::runtime_error("D3D12 failure "+std::to_string(static_cast<unsigned>(hr)));}
 uint64_t aligned(uint64_t n){return (n+255)&~255ull;}
 void uav(ID3D12GraphicsCommandList*l){D3D12_RESOURCE_BARRIER b={};b.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;l->ResourceBarrier(1,&b);}
@@ -145,6 +146,32 @@ int main(){try{
     check(device->GetDeviceRemovedReason());second_batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));
     if(reference!=snapshot())throw std::runtime_error("Deferred scratch serialization mismatch");
     std::cout<<"PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.\n";
+    // Bugs caught: 0, False positives: 0
+    // Build preference: prebuild sizes must cover both the game's fast-build
+    // flags and the preferred fast-trace flags; BLAS builds are rewritten and
+    // the setting is locked once a BLAS has been built.
+    {
+        if(ERBatchBuildPreference(1)!=1)throw std::runtime_error("Build preference not accepted before first preferred build");
+        auto fast_build=inputs;fast_build.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+        auto fast_trace=fast_build;fast_trace.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO a={},b={},combined={};
+        device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_build,&a);device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_trace,&b);
+        er_batch::prebuild_info(device.Get(),&fast_build,&combined);
+        if(combined.ResultDataMaxSizeInBytes<(std::max)(a.ResultDataMaxSizeInBytes,b.ResultDataMaxSizeInBytes) ||
+           combined.ScratchDataSizeInBytes<(std::max)(a.ScratchDataSizeInBytes,b.ScratchDataSizeInBytes) ||
+           combined.UpdateScratchDataSizeInBytes<(std::max)(a.UpdateScratchDataSizeInBytes,b.UpdateScratchDataSizeInBytes))
+            throw std::runtime_error("Prebuild sizes do not cover the preferred flags");
+        // Build and refit with the rewritten flags on the GPU.
+        auto build_inputs=fast_build;if(!er_batch::prefer_trace(build_inputs) || build_inputs.Flags!=fast_trace.Flags)throw std::runtime_error("Fast-build BLAS was not rewritten");
+        auto dest=buffer(device.Get(),aligned(combined.ResultDataMaxSizeInBytes),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto preferred_scratch=buffer(device.Get(),aligned((std::max)(combined.ScratchDataSizeInBytes,combined.UpdateScratchDataSizeInBytes)),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d={};d.Inputs=build_inputs;d.DestAccelerationStructureData=dest->GetGPUVirtualAddress();
+        d.ScratchAccelerationStructureData=preferred_scratch->GetGPUVirtualAddress();list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());
+        auto refit=fast_build;refit.Flags|=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;er_batch::prefer_trace(refit);
+        d.Inputs=refit;d.SourceAccelerationStructureData=d.DestAccelerationStructureData;list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());submit();
+        if(ERBatchBuildPreference(0)!=1)throw std::runtime_error("Build preference changed after a BLAS was built");
+        std::cout<<"PASS: build preference covers prebuild sizes, rewrites fast-build BLAS, and locks after first build.\n";
+    }
     char status[2048];ERBatchStatus(status,sizeof(status));std::cout<<status<<"\n";
     size_t errors=0;if(info){for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size=0;info->GetMessage(i,nullptr,&size);std::vector<unsigned char> storage(size);auto*msg=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         info->GetMessage(i,msg,&size);if(msg->Severity<=D3D12_MESSAGE_SEVERITY_ERROR){++errors;std::cerr<<msg->pDescription<<"\n";}}}

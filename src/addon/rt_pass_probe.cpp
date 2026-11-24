@@ -282,13 +282,14 @@ void Present(command_queue* queue,swapchain*,const rect*,const rect*,uint32_t,co
     Log(reply);std::ofstream(folder/"command.done")<<reply;
 }
 }
+HMODULE runtime_module(){return reshade::internal::get_reshade_module_handle();}
 BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
     if(reason==DLL_PROCESS_ATTACH) {
         if(!reshade::register_addon(module))return FALSE;
         std::wstring path(32768,L'\0');
         const auto length=GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
         path.resize(length);folder=fs::path(path).parent_path();
-        if(auto runtime=reshade::internal::get_reshade_module_handle()) {
+        if(auto runtime=runtime_module()) {
             batch_tag=reinterpret_cast<BatchTagFn>(GetProcAddress(runtime,"ERBatchTag"));
             batch_control=reinterpret_cast<BatchControlFn>(GetProcAddress(runtime,"ERBatchControl"));
             batch_status=reinterpret_cast<BatchStatusFn>(GetProcAddress(runtime,"ERBatchStatus"));
@@ -296,9 +297,13 @@ BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
             batch_trace=reinterpret_cast<BatchTraceFn>(GetProcAddress(runtime,"ERBatchTrace"));
         }
         if(batch_control)batch_control(GetPrivateProfileIntW(L"Settings",L"BatchMode",1,(folder/L"RTVegetation.ini").c_str()));
+        unsigned preference=0;
+        if(auto set_preference=reinterpret_cast<BatchControlFn>(GetProcAddress(runtime_module(),"ERBatchBuildPreference")))
+            preference=set_preference(GetPrivateProfileIntW(L"Settings",L"BuildPreference",0,(folder/L"RTVegetation.ini").c_str())?1:0);
         const auto configured=GetPrivateProfileIntW(L"Settings",L"UpdateInterval",1,(folder/L"RTVegetation.ini").c_str());
         interval=configured>=1 && configured<=4?configured:1;
-        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr));
+        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr)
+            +" build_preference="+std::to_string(preference));
 #define ON(event,fn) reshade::register_event<reshade::addon_event::event>(fn)
         ON(init_device,InitDevice);ON(destroy_device,DestroyDevice);ON(init_command_list,InitList);
         ON(destroy_command_list,DestroyList);ON(reset_command_list,ResetList);ON(close_command_list,CloseList);

@@ -30,4 +30,12 @@ private:
     std::unique_ptr<impl> p;
 };
 void submitted(ID3D12CommandQueue *, const std::vector<std::shared_ptr<arena>> &);
+// Optional BLAS build preference. When enabled before the first BLAS build,
+// PREFER_FAST_BUILD bottom-level builds and their refits use PREFER_FAST_TRACE
+// instead. The choice is fixed for the process once a BLAS has been built, so
+// every refit keeps the flags of the build it updates.
+bool prefer_trace(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS &);
+// Prebuild sizes covering both the game's flags and the preferred flags.
+void prebuild_info(ID3D12Device5 *, const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS *,
+                   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO *);
 }

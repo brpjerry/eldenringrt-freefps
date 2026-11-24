@@ -41,7 +41,7 @@ int wmain(int argc, wchar_t** argv) {
         SetEnvironmentVariableW(L"RESHADE_DISABLE_GRAPHICS_HOOK", nullptr);
         const HMODULE runtime = LoadLibraryW(runtime_path.c_str());
         require(runtime != nullptr, "Runtime DLL failed to load");
-        for (const char* name : {"ERBatchTag", "ERBatchControl", "ERBatchStatus", "ERBatchTick", "ERBatchTrace"})
+        for (const char* name : {"ERBatchTag", "ERBatchControl", "ERBatchStatus", "ERBatchTick", "ERBatchTrace", "ERBatchBuildPreference"})
             require(GetProcAddress(runtime, name) != nullptr, "Missing native batching export");
         const auto base_path = reinterpret_cast<void(*)(char*, size_t*)>(GetProcAddress(runtime, "ReShadeGetBasePath"));
         require(base_path != nullptr, "Missing ReShade base-path API");
