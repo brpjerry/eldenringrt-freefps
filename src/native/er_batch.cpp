@@ -22,7 +22,11 @@ using Microsoft::WRL::ComPtr;
 namespace er_batch {
 namespace {
 const GUID committed_id={0xe7812cc7,0x9157,0x4aaf,{0x9b,0x31,0x71,0xb5,0x3c,0x63,0x9d,0x15}};
-constexpr uint64_t arena_size=8ull*1024*1024, max_pool_bytes=512ull*1024*1024;
+// Scratch arenas are sized to the work: refit scratch is often a few hundred
+// bytes, and a command list keeps its arenas until it is reset. Fixed 8 MiB
+// arenas let idle lists pin the whole pool and switch batching off.
+constexpr uint64_t min_arena=256ull*1024, max_arena=8ull*1024*1024, max_pool_bytes=512ull*1024*1024;
+uint64_t arena_class(uint64_t bytes){uint64_t size=min_arena;while(size<bytes && size<max_arena)size*=2;return size;}
 std::atomic<unsigned> mode{0}; // 0 passthrough, 1 audit/simulate, 2 batch
 std::atomic<uint64_t> candidates{0},accepted{0},batches{0},multi_batches{0},batched_builds{0},max_batch{0};
 std::atomic<uint64_t> reject_post{0},reject_resource{0},reject_input{0},reject_scratch{0},reject_mode{0};
@@ -31,8 +35,13 @@ std::atomic<uint64_t> live_frame{0},trace_frame{0};
 std::atomic<unsigned> build_preference{0}; // 0 game flags, 1 prefer fast trace for fast-build BLAS
 std::atomic<bool> preference_latched{false};
 std::atomic<uint64_t> preferred_builds{0},preferred_queries{0};
+std::atomic<uint64_t> blas_full_builds{0},blas_static_builds{0},blas_static_fast_build{0},blas_static_fast_trace{0};
+// Only BLAS built without ALLOW_UPDATE: they are never refit, so a
+// higher-quality BVH costs build time once instead of refit time every frame.
+// (Rewriting refitted BLAS measured 9% slower: refits cost 2-3x more.)
 bool rewrite_preference(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS&in){
-    if(in.Type!=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL || build_preference.load()!=1 ||
+    constexpr auto update_flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    if(in.Type!=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL || build_preference.load()!=1 || (in.Flags&update_flags) ||
        !(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD))return false;
     in.Flags=(in.Flags&~D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD)|
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -69,24 +78,30 @@ std::vector<std::shared_ptr<arena>> pool;
 struct arena {
     ComPtr<ID3D12Resource> resource;
     ID3D12Device *device=nullptr;
+    uint64_t size=0;
     std::vector<receipt> receipts;
     bool poisoned=false;
 };
 namespace {
-std::shared_ptr<arena> acquire(ID3D12Device *device) {
+uint64_t pool_bytes=0;
+// Smallest free, fence-retired arena of at least `bytes`, else a new one.
+std::shared_ptr<arena> acquire(ID3D12Device *device,uint64_t bytes) {
     std::lock_guard lock(pool_mutex);
-    for(auto&a:pool) if(a.use_count()==1 && a->device==device && !a->poisoned) {
+    std::shared_ptr<arena> best;
+    for(auto&a:pool) if(a.use_count()==1 && a->device==device && !a->poisoned && a->size>=bytes && (!best || a->size<best->size)) {
         bool complete=true;for(auto&r:a->receipts)if(r.fence->GetCompletedValue()<r.value){complete=false;break;}
-        if(complete){a->receipts.clear();return a;}
+        if(complete)best=a;
     }
-    if(pool.size()*arena_size>=max_pool_bytes)return {};
-    auto a=std::make_shared<arena>();a->device=device;
+    if(best){best->receipts.clear();return best;}
+    const auto size=arena_class(bytes);
+    if(size<bytes || pool_bytes+size>max_pool_bytes)return {};
+    auto a=std::make_shared<arena>();a->device=device;a->size=size;
     D3D12_HEAP_PROPERTIES heap={};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC d={};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=arena_size;
+    D3D12_RESOURCE_DESC d={};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=size;
     d.Height=1;d.DepthOrArraySize=1;d.MipLevels=1;d.SampleDesc.Count=1;
     d.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;d.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,nullptr,IID_PPV_ARGS(&a->resource))))return {};
-    a->resource->SetName(L"ER batching scratch (fence-retired)");pool.push_back(a);return a;
+    a->resource->SetName(L"ER batching scratch (fence-retired)");pool.push_back(a);pool_bytes+=size;return a;
 }
 }
 void committed_resource(ID3D12Resource*r,D3D12_HEAP_FLAGS flags) {
@@ -129,6 +144,7 @@ struct state::impl {
     };
     std::vector<build_record> pending;
     std::shared_ptr<arena> scratch;
+    std::vector<std::shared_ptr<arena>> retired; // outgrown arenas still referenced by this recording
     std::unordered_map<std::string,D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO> sizes;
     bool resolve(uint64_t address,uint64_t bytes,region& out) {
         if(!address||!bytes||address>UINT64_MAX-bytes)return false;
@@ -156,8 +172,10 @@ state::state():p(std::make_unique<impl>()){}
 state::~state()=default;
 void state::init(reshade::d3d12::device_impl*d,ID3D12GraphicsCommandList*n){p->device=d;p->native=n;}
 void state::tag(unsigned flags){if(flags&0x100)p->eligible=(flags&1)!=0;else p->safe_shader=(flags&1)!=0;}
-void state::reset(){p->pending.clear();p->scratch.reset();p->offset=0;p->pending_mode=0;p->safe_shader=false;p->eligible=false;p->disabled=false;}
-std::shared_ptr<arena> state::scratch()const{return p->scratch;}
+void state::reset(){p->pending.clear();p->scratch.reset();p->retired.clear();p->offset=0;p->pending_mode=0;p->safe_shader=false;p->eligible=false;p->disabled=false;}
+std::vector<std::shared_ptr<arena>> state::scratch()const{
+    auto all=p->retired;if(p->scratch)all.push_back(p->scratch);return all;
+}
 void state::flush(const char *reason) {
     if(p->pending.empty())return;
     const uint64_t n=p->pending.size();++batches;
@@ -254,7 +272,7 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
     if(it!=p->sizes.end())sizes=it->second;
     else {p->dxr->GetRaytracingAccelerationStructurePrebuildInfo(&inputs,&sizes);if(p->sizes.size()>4096)p->sizes.clear();p->sizes.emplace(std::move(key),sizes);}
     const auto needed=align256(sizes.UpdateScratchDataSizeInBytes);
-    if(!needed || needed>arena_size || !sizes.ResultDataMaxSizeInBytes){++reject_scratch;flush("size");return false;}
+    if(!needed || needed>max_arena || !sizes.ResultDataMaxSizeInBytes){++reject_scratch;flush("size");return false;}
     if(!p->resolve(d->DestAccelerationStructureData,sizes.ResultDataMaxSizeInBytes,record.write)){
         ++reject_resource;trace(p->id,"reject_destination",d->DestAccelerationStructureData);flush("resource");return false;}
     for(const auto&read:record.reads)if(overlap(record.write,read)){++reject_input;flush("self_overlap");return false;}
@@ -265,8 +283,12 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
         for(auto&r:record.reads)conflict|=overlap(r,other.write);
     }
     if(conflict)flush("conflict");
-    if(p->pending.size()>=64 || needed>arena_size-p->offset)flush("capacity");
-    if(current==2 && !p->scratch)p->scratch=acquire(reinterpret_cast<ID3D12Device*>(p->device->get_native()));
+    const uint64_t capacity=p->scratch?p->scratch->size:max_arena;
+    if(p->pending.size()>=64 || needed>capacity-p->offset)flush("capacity");
+    // An arena too small for this build stays with the list until reset; its
+    // earlier builds are already recorded.
+    if(p->scratch && needed>p->scratch->size)p->retired.push_back(std::move(p->scratch));
+    if(current==2 && !p->scratch)p->scratch=acquire(reinterpret_cast<ID3D12Device*>(p->device->get_native()),needed);
     if(current==2 && !p->scratch){++reject_scratch;flush("allocation");return false;}
     record.scratch_offset=p->offset;p->offset+=needed;p->pending_mode=current;
     trace(p->id,"accepted",d->DestAccelerationStructureData,needed,record.reads.size());
@@ -276,6 +298,14 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
 bool prefer_trace(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS&in){
     if(in.Type!=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL)return false;
     preference_latched=true;
+    if(!(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE)){
+        ++blas_full_builds;
+        if(!(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE)){
+            ++blas_static_builds;
+            if(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD)++blas_static_fast_build;
+            if(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE)++blas_static_fast_trace;
+        }
+    }
     if(!rewrite_preference(in))return false;
     ++preferred_builds;return true;
 }
@@ -336,7 +366,9 @@ extern "C" __declspec(dllexport) void ERBatchStatus(char*buffer,unsigned capacit
      <<" reject_scratch="<<reject_scratch<<" reject_mode="<<reject_mode
      <<" flush_transition="<<flush_transition<<" flush_alias="<<flush_alias<<" flush_dispatch="<<flush_dispatch
      <<" flush_work="<<flush_work<<" flush_conflict="<<flush_conflict
-     <<" build_preference="<<build_preference<<" preferred_builds="<<preferred_builds<<" preferred_queries="<<preferred_queries;
-    {std::lock_guard lock(pool_mutex);s<<" scratch_mib="<<pool.size()*arena_size/(1024*1024);}
+     <<" build_preference="<<build_preference<<" preferred_builds="<<preferred_builds<<" preferred_queries="<<preferred_queries
+     <<" blas_full_builds="<<blas_full_builds<<" blas_static_builds="<<blas_static_builds
+     <<" static_fast_build="<<blas_static_fast_build<<" static_fast_trace="<<blas_static_fast_trace;
+    {std::lock_guard lock(pool_mutex);s<<" scratch_kib="<<pool_bytes/1024<<" scratch_arenas="<<pool.size();}
     if(capacity){const auto text=s.str();const auto n=std::min<size_t>(text.size(),capacity-1);std::memcpy(buffer,text.data(),n);buffer[n]=0;}
 }

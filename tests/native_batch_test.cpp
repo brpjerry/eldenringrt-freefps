@@ -41,7 +41,7 @@ int main(){try{
     HANDLE event=CreateEventW(nullptr,FALSE,FALSE,nullptr);if(!event)throw std::runtime_error("No fence event");
     reshade::d3d12::device_impl adapter_device(device.Get());er_batch::state batch;batch.init(&adapter_device,list.Get());
     auto submit=[&](){batch.flush("Close");check(list->Close());ID3D12CommandList*l=list.Get();queue->ExecuteCommandLists(1,&l);
-        if(auto a=batch.scratch())er_batch::submitted(queue.Get(),{a});
+        er_batch::submitted(queue.Get(),batch.scratch());
         check(queue->Signal(fence.Get(),++serial));check(fence->SetEventOnCompletion(serial,event));
         if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)throw std::runtime_error("GPU fence timeout");
         check(device->GetDeviceRemovedReason());batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));};
@@ -127,7 +127,7 @@ int main(){try{
     ComPtr<ID3D12Fence> gate;check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)));
     struct release_gate {ID3D12Fence*f;~release_gate(){f->Signal(1);}} gate_guard{gate.Get()};
     update(0);batch.flush("Close");check(list->Close());
-    auto first_arena=batch.scratch();auto*first_identity=first_arena.get();
+    auto first_arenas=batch.scratch();if(first_arenas.size()!=1)throw std::runtime_error("Expected one scratch arena");auto first_arena=first_arenas.front();auto*first_identity=first_arena.get();
     check(queue->Wait(gate.Get(),1));ID3D12CommandList*first_list=list.Get();queue->ExecuteCommandLists(1,&first_list);
     er_batch::submitted(queue.Get(),{first_arena});batch.reset();first_arena.reset();
     ComPtr<ID3D12CommandAllocator> second_allocator;check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&second_allocator)));
@@ -138,9 +138,9 @@ int main(){try{
     second_desc.SourceAccelerationStructureData=second_desc.DestAccelerationStructureData=addresses[1];
     second_desc.ScratchAccelerationStructureData=scratch->GetGPUVirtualAddress();
     second_batch.tag(0x101);
-    if(!second_batch.build(&second_desc,0) || second_batch.scratch().get()==first_identity)throw std::runtime_error("In-flight scratch reused");
+    if(!second_batch.build(&second_desc,0) || second_batch.scratch().empty() || second_batch.scratch().front().get()==first_identity)throw std::runtime_error("In-flight scratch reused");
     second_batch.flush("Close");check(second_list->Close());ID3D12CommandList*second_submission=second_list.Get();queue->ExecuteCommandLists(1,&second_submission);
-    er_batch::submitted(queue.Get(),{second_batch.scratch()});check(queue->Signal(fence.Get(),++serial));
+    er_batch::submitted(queue.Get(),second_batch.scratch());check(queue->Signal(fence.Get(),++serial));
     check(gate->Signal(1));check(fence->SetEventOnCompletion(serial,event));
     if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)throw std::runtime_error("Deferred scratch test timeout");
     check(device->GetDeviceRemovedReason());second_batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));
@@ -148,31 +148,37 @@ int main(){try{
     std::cout<<"PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.\n";
     // Bugs caught: 0, False positives: 0
     // Build preference: prebuild sizes must cover both the game's fast-build
-    // flags and the preferred fast-trace flags; BLAS builds are rewritten and
-    // the setting is locked once a BLAS has been built.
+    // flags and the preferred fast-trace flags; static (non-updatable) BLAS are
+    // rewritten, updatable BLAS are not, and the setting locks after a build.
     {
         if(ERBatchBuildPreference(1)!=1)throw std::runtime_error("Build preference not accepted before first preferred build");
-        auto fast_build=inputs;fast_build.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-        auto fast_trace=fast_build;fast_trace.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+        auto fast_build=inputs;fast_build.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+        auto fast_trace=fast_build;fast_trace.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO a={},b={},combined={};
         device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_build,&a);device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_trace,&b);
         er_batch::prebuild_info(device.Get(),&fast_build,&combined);
         if(combined.ResultDataMaxSizeInBytes<(std::max)(a.ResultDataMaxSizeInBytes,b.ResultDataMaxSizeInBytes) ||
-           combined.ScratchDataSizeInBytes<(std::max)(a.ScratchDataSizeInBytes,b.ScratchDataSizeInBytes) ||
-           combined.UpdateScratchDataSizeInBytes<(std::max)(a.UpdateScratchDataSizeInBytes,b.UpdateScratchDataSizeInBytes))
+           combined.ScratchDataSizeInBytes<(std::max)(a.ScratchDataSizeInBytes,b.ScratchDataSizeInBytes))
             throw std::runtime_error("Prebuild sizes do not cover the preferred flags");
-        // Build and refit with the rewritten flags on the GPU.
-        auto build_inputs=fast_build;if(!er_batch::prefer_trace(build_inputs) || build_inputs.Flags!=fast_trace.Flags)throw std::runtime_error("Fast-build BLAS was not rewritten");
+        auto updatable=fast_build;updatable.Flags|=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+        if(er_batch::prefer_trace(updatable))throw std::runtime_error("Updatable BLAS was rewritten");
+        auto build_inputs=fast_build;if(!er_batch::prefer_trace(build_inputs) || build_inputs.Flags!=fast_trace.Flags)throw std::runtime_error("Static fast-build BLAS was not rewritten");
         auto dest=buffer(device.Get(),aligned(combined.ResultDataMaxSizeInBytes),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        auto preferred_scratch=buffer(device.Get(),aligned((std::max)(combined.ScratchDataSizeInBytes,combined.UpdateScratchDataSizeInBytes)),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto preferred_scratch=buffer(device.Get(),aligned(combined.ScratchDataSizeInBytes),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d={};d.Inputs=build_inputs;d.DestAccelerationStructureData=dest->GetGPUVirtualAddress();
-        d.ScratchAccelerationStructureData=preferred_scratch->GetGPUVirtualAddress();list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());
-        auto refit=fast_build;refit.Flags|=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;er_batch::prefer_trace(refit);
-        d.Inputs=refit;d.SourceAccelerationStructureData=d.DestAccelerationStructureData;list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());submit();
+        d.ScratchAccelerationStructureData=preferred_scratch->GetGPUVirtualAddress();list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());submit();
         if(ERBatchBuildPreference(0)!=1)throw std::runtime_error("Build preference changed after a BLAS was built");
-        std::cout<<"PASS: build preference covers prebuild sizes, rewrites fast-build BLAS, and locks after first build.\n";
+        std::cout<<"PASS: build preference covers prebuild sizes, rewrites only static fast-build BLAS, and locks after first build.\n";
     }
     char status[2048];ERBatchStatus(status,sizeof(status));std::cout<<status<<"\n";
+    // Bugs caught: 0, False positives: 0
+    // Scratch arenas are sized to the refits: these small updates must not
+    // reserve fixed 8 MiB arenas per command list (1.0.3 used 16 MiB here).
+    {
+        const std::string text(status);const auto at=text.find("scratch_kib=");
+        if(at==std::string::npos || std::stoull(text.substr(at+12))>=8*1024)throw std::runtime_error("Scratch pool not right-sized: "+text);
+        std::cout<<"PASS: scratch arenas sized to refit needs.\n";
+    }
     size_t errors=0;if(info){for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size=0;info->GetMessage(i,nullptr,&size);std::vector<unsigned char> storage(size);auto*msg=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         info->GetMessage(i,msg,&size);if(msg->Severity<=D3D12_MESSAGE_SEVERITY_ERROR){++errors;std::cerr<<msg->pDescription<<"\n";}}}
     check(list->Close());CloseHandle(event);er_batch::forget_resource(input.Get());er_batch::forget_resource(nonoverlap.Get());
