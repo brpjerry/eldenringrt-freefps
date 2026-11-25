@@ -32,21 +32,6 @@ std::atomic<uint64_t> candidates{0},accepted{0},batches{0},multi_batches{0},batc
 std::atomic<uint64_t> reject_post{0},reject_resource{0},reject_input{0},reject_scratch{0},reject_mode{0};
 std::atomic<uint64_t> flush_transition{0},flush_alias{0},flush_dispatch{0},flush_work{0},flush_conflict{0};
 std::atomic<uint64_t> live_frame{0},trace_frame{0};
-std::atomic<unsigned> build_preference{0}; // 0 game flags, 1 prefer fast trace for fast-build BLAS
-std::atomic<bool> preference_latched{false};
-std::atomic<uint64_t> preferred_builds{0},preferred_queries{0};
-std::atomic<uint64_t> blas_full_builds{0},blas_static_builds{0},blas_static_fast_build{0},blas_static_fast_trace{0};
-// Only BLAS built without ALLOW_UPDATE: they are never refit, so a
-// higher-quality BVH costs build time once instead of refit time every frame.
-// (Rewriting refitted BLAS measured 9% slower: refits cost 2-3x more.)
-bool rewrite_preference(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS&in){
-    constexpr auto update_flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE|D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
-    if(in.Type!=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL || build_preference.load()!=1 || (in.Flags&update_flags) ||
-       !(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD))return false;
-    in.Flags=(in.Flags&~D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD)|
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-    return true;
-}
 std::mutex trace_mutex;
 std::string trace_path;
 std::vector<std::string> trace_rows;
@@ -295,31 +280,6 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
     p->pending.push_back(std::move(record));++accepted;
     return current==2;
 }
-bool prefer_trace(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS&in){
-    if(in.Type!=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL)return false;
-    preference_latched=true;
-    if(!(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE)){
-        ++blas_full_builds;
-        if(!(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE)){
-            ++blas_static_builds;
-            if(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD)++blas_static_fast_build;
-            if(in.Flags&D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE)++blas_static_fast_trace;
-        }
-    }
-    if(!rewrite_preference(in))return false;
-    ++preferred_builds;return true;
-}
-void prebuild_info(ID3D12Device5*device,const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS*in,
-                   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO*out){
-    device->GetRaytracingAccelerationStructurePrebuildInfo(in,out);
-    if(!in || !out)return;
-    auto preferred=*in;if(!rewrite_preference(preferred))return;
-    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO alt={};device->GetRaytracingAccelerationStructurePrebuildInfo(&preferred,&alt);
-    out->ResultDataMaxSizeInBytes=(std::max)(out->ResultDataMaxSizeInBytes,alt.ResultDataMaxSizeInBytes);
-    out->ScratchDataSizeInBytes=(std::max)(out->ScratchDataSizeInBytes,alt.ScratchDataSizeInBytes);
-    out->UpdateScratchDataSizeInBytes=(std::max)(out->UpdateScratchDataSizeInBytes,alt.UpdateScratchDataSizeInBytes);
-    ++preferred_queries;
-}
 void submitted(ID3D12CommandQueue*q,const std::vector<std::shared_ptr<arena>>&arenas){
     if(arenas.empty())return;
     std::lock_guard lock(pool_mutex);auto&state=queues[q];
@@ -342,11 +302,6 @@ extern "C" __declspec(dllexport) void ERBatchTag(reshade::api::command_list*list
 extern "C" __declspec(dllexport) unsigned ERBatchControl(unsigned value){
     if(value<=2)er_batch::mode=value;return er_batch::mode.load();
 }
-// Applies only before the first BLAS build; returns the effective preference.
-extern "C" __declspec(dllexport) unsigned ERBatchBuildPreference(unsigned value){
-    if(value<=1 && !er_batch::preference_latched.load())er_batch::build_preference=value;
-    return er_batch::build_preference.load();
-}
 extern "C" __declspec(dllexport) void ERBatchTick(uint64_t frame){
     using namespace er_batch;live_frame=frame;
     if(trace_frame.load() && frame>trace_frame.load()+4){
@@ -365,10 +320,7 @@ extern "C" __declspec(dllexport) void ERBatchStatus(char*buffer,unsigned capacit
      <<" reject_post="<<reject_post<<" reject_resource="<<reject_resource<<" reject_input="<<reject_input
      <<" reject_scratch="<<reject_scratch<<" reject_mode="<<reject_mode
      <<" flush_transition="<<flush_transition<<" flush_alias="<<flush_alias<<" flush_dispatch="<<flush_dispatch
-     <<" flush_work="<<flush_work<<" flush_conflict="<<flush_conflict
-     <<" build_preference="<<build_preference<<" preferred_builds="<<preferred_builds<<" preferred_queries="<<preferred_queries
-     <<" blas_full_builds="<<blas_full_builds<<" blas_static_builds="<<blas_static_builds
-     <<" static_fast_build="<<blas_static_fast_build<<" static_fast_trace="<<blas_static_fast_trace;
+     <<" flush_work="<<flush_work<<" flush_conflict="<<flush_conflict;
     {std::lock_guard lock(pool_mutex);s<<" scratch_kib="<<pool_bytes/1024<<" scratch_arenas="<<pool.size();}
     if(capacity){const auto text=s.str();const auto n=std::min<size_t>(text.size(),capacity-1);std::memcpy(buffer,text.data(),n);buffer[n]=0;}
 }

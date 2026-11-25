@@ -17,7 +17,6 @@
 using Microsoft::WRL::ComPtr;
 extern "C" unsigned ERBatchControl(unsigned);
 extern "C" void ERBatchStatus(char*,unsigned);
-extern "C" unsigned ERBatchBuildPreference(unsigned);
 void check(HRESULT hr){if(FAILED(hr))throw std::runtime_error("D3D12 failure "+std::to_string(static_cast<unsigned>(hr)));}
 uint64_t aligned(uint64_t n){return (n+255)&~255ull;}
 void uav(ID3D12GraphicsCommandList*l){D3D12_RESOURCE_BARRIER b={};b.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;l->ResourceBarrier(1,&b);}
@@ -146,30 +145,6 @@ int main(){try{
     check(device->GetDeviceRemovedReason());second_batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));
     if(reference!=snapshot())throw std::runtime_error("Deferred scratch serialization mismatch");
     std::cout<<"PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.\n";
-    // Bugs caught: 0, False positives: 0
-    // Build preference: prebuild sizes must cover both the game's fast-build
-    // flags and the preferred fast-trace flags; static (non-updatable) BLAS are
-    // rewritten, updatable BLAS are not, and the setting locks after a build.
-    {
-        if(ERBatchBuildPreference(1)!=1)throw std::runtime_error("Build preference not accepted before first preferred build");
-        auto fast_build=inputs;fast_build.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-        auto fast_trace=fast_build;fast_trace.Flags=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO a={},b={},combined={};
-        device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_build,&a);device->GetRaytracingAccelerationStructurePrebuildInfo(&fast_trace,&b);
-        er_batch::prebuild_info(device.Get(),&fast_build,&combined);
-        if(combined.ResultDataMaxSizeInBytes<(std::max)(a.ResultDataMaxSizeInBytes,b.ResultDataMaxSizeInBytes) ||
-           combined.ScratchDataSizeInBytes<(std::max)(a.ScratchDataSizeInBytes,b.ScratchDataSizeInBytes))
-            throw std::runtime_error("Prebuild sizes do not cover the preferred flags");
-        auto updatable=fast_build;updatable.Flags|=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
-        if(er_batch::prefer_trace(updatable))throw std::runtime_error("Updatable BLAS was rewritten");
-        auto build_inputs=fast_build;if(!er_batch::prefer_trace(build_inputs) || build_inputs.Flags!=fast_trace.Flags)throw std::runtime_error("Static fast-build BLAS was not rewritten");
-        auto dest=buffer(device.Get(),aligned(combined.ResultDataMaxSizeInBytes),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        auto preferred_scratch=buffer(device.Get(),aligned(combined.ScratchDataSizeInBytes),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d={};d.Inputs=build_inputs;d.DestAccelerationStructureData=dest->GetGPUVirtualAddress();
-        d.ScratchAccelerationStructureData=preferred_scratch->GetGPUVirtualAddress();list->BuildRaytracingAccelerationStructure(&d,0,nullptr);uav(list.Get());submit();
-        if(ERBatchBuildPreference(0)!=1)throw std::runtime_error("Build preference changed after a BLAS was built");
-        std::cout<<"PASS: build preference covers prebuild sizes, rewrites only static fast-build BLAS, and locks after first build.\n";
-    }
     char status[2048];ERBatchStatus(status,sizeof(status));std::cout<<status<<"\n";
     // Bugs caught: 0, False positives: 0
     // Scratch arenas are sized to the refits: these small updates must not
