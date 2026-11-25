@@ -16,11 +16,13 @@ Committed resources are marked. Placed resources are checked against their heap 
 
 ## Scheduling and synchronization
 
-The runtime defers eligible independent refits across safe vegetation animation dispatches, using separate 256-byte-aligned scratch regions. Groups are bounded by 64 builds and an 8 MiB arena. Original resource barriers remain and additional UAV barriers bound groups.
+The runtime defers eligible independent refits across safe animation dispatches, using separate 256-byte-aligned scratch regions. Groups are bounded by 64 builds and the current arena's size.
+
+With `BatchAllAnimation=1` (default), any compute pipeline whose debug name contains `_Animation` and whose bytecode is pre-RayQuery counts as safe, not only recognized vegetation. This covers skinned characters (`_Animation_Skin`) and other animated meshes. The argument is the same as for vegetation: such shaders cannot read an acceleration structure, and writing a queued build input requires a state transition that flushes the queue first. Skin dispatches previously also split vegetation groups, since every unrecognized dispatch flushes. Original resource barriers remain and additional UAV barriers bound groups.
 
 Dependency transitions, aliasing, repeated destinations, unknown compute, ray dispatch, draws, copies, queries, indirect work, TLAS builds and command-list completion flush queued work. Enhanced barriers and predication disable batching for that list until reset.
 
-Scratch arenas are retained by command lists and queue submission receipts. Reuse requires released list ownership and completed fences from every recorded submission. The pool is capped at 512 MiB; failure falls back to original work. Command-list boundaries and submission ordering remain intact.
+Scratch arenas are retained by command lists and queue submission receipts. Arenas start at 256 KiB and double up to 8 MiB as a single build requires; a list keeps any arena it outgrew until reset and reports all of them at submission. Reuse requires released list ownership and completed fences from every recorded submission. The pool is capped at 512 MiB; failure falls back to original work. Command-list boundaries and submission ordering remain intact. Fixed 8 MiB arenas (1.0.x) let idle command lists pin the pool: one long Windows session hit the cap and rejected every later candidate.
 
 ## Update cadence
 

@@ -18,9 +18,9 @@ QUICK INSTALL
    to the title menu and reload your character to apply it. This mod does
    not change resolution or RT quality automatically.
 
-5. Batching starts enabled with every-frame vegetation updates. To confirm
-   loading, open the generated probe.log in this folder and look for:
-     RT batch experiment loaded; interval=1 native bridge=1
+5. Batching starts enabled with every-frame updates. To confirm loading,
+   open the generated probe.log in this folder and look for:
+     RT batch experiment loaded; interval=1 native bridge=1 all_animation=1
 
 ME3 MANAGER
 
@@ -58,15 +58,19 @@ Installation does not move, rename or delete any existing save files.
 
 CONFIGURATION
 
-Batching and full-rate vegetation updates are enabled by default. To change
-these settings, close the game and edit RTVegetation.ini before launching:
+Batching and full-rate updates are enabled by default. To change these
+settings, close the game and edit RTVegetation.ini before launching:
   [Settings]
   UpdateInterval=1
   BatchMode=2
+  BatchAllAnimation=1
 UpdateInterval=1 preserves every-frame updates. Optional UpdateInterval=2
 reduces vegetation refits to a two-frame schedule, which can make moving
 vegetation's RT representation lag by one frame. BatchMode=2 enables batching;
 0 disables it. For original scheduling use BatchMode=0 and UpdateInterval=1.
+BatchAllAnimation=1 also batches refits after other animated meshes, such as
+characters; 0 limits batching to recognized vegetation as in 1.0.x. The
+two-frame schedule always applies to vegetation only.
 
 OPTIONAL RESHADE EFFECTS
 
@@ -83,15 +87,15 @@ depth-based effects may need depth-buffer configuration and add GPU cost.
 
 HOW IT WORKS AND TRADE-OFFS
 
-The custom D3D12 runtime groups eligible independent vegetation acceleration-
-structure refits, assigns separate scratch memory, and submits groups of up
-to 64. Original resource barriers remain, and groups are flushed before
+The custom D3D12 runtime groups eligible independent acceleration-structure
+refits after vegetation and other animation, assigns separate scratch memory,
+and submits groups of up to 64. Original resource barriers remain, and groups are flushed before
 dependent work. Scratch memory is reused only after GPU completion.
 
-Default full-rate mode skips no vegetation updates and does not lower ray
-resolution or RT quality. Unrecognized or unsupported work keeps its original
-path. Extra scratch VRAM was 128-224 MiB in tested scenes, with a 512 MiB pool
-ceiling. CPU bookkeeping and GPU power use can increase. Gains depend on the
+Default full-rate mode skips no updates and does not lower ray resolution
+or RT quality. Unrecognized or unsupported work keeps its original path.
+Scratch memory is sized to the refits (about 4 MiB in a tested scene under
+Proton; 1.0.x reserved 8 MiB per command list), with a 512 MiB ceiling. CPU bookkeeping and GPU power use can increase. Gains depend on the
 scene; rain alone was not established as the cause of the original slowdown.
 
 Controlled fixed-view testing at Four Belfries, 4K RT Maximum, measured about

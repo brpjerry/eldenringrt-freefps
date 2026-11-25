@@ -309,7 +309,7 @@ BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
         if(batch_control)batch_control(GetPrivateProfileIntW(L"Settings",L"BatchMode",1,(folder/L"RTVegetation.ini").c_str()));
         const auto configured=GetPrivateProfileIntW(L"Settings",L"UpdateInterval",1,(folder/L"RTVegetation.ini").c_str());
         interval=configured>=1 && configured<=4?configured:1;
-        all_animation=GetPrivateProfileIntW(L"Settings",L"BatchAllAnimation",0,(folder/L"RTVegetation.ini").c_str())==1;
+        all_animation=GetPrivateProfileIntW(L"Settings",L"BatchAllAnimation",1,(folder/L"RTVegetation.ini").c_str())==1;
         Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr)
             +" all_animation="+std::to_string(all_animation.load()));
 #define ON(event,fn) reshade::register_event<reshade::addon_event::event>(fn)

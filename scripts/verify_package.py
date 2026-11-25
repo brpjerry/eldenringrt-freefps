@@ -78,7 +78,8 @@ def validate_package(archive, expected_commit=None):
         raise ValueError("Public package must not override the game save filename.")
     config = configparser.ConfigParser()
     config.read_string(members["RTVegetation.ini"].decode())
-    if config.getint("Settings", "UpdateInterval") != 1 or config.getint("Settings", "BatchMode") != 2:
+    if (config.getint("Settings", "UpdateInterval") != 1 or config.getint("Settings", "BatchMode") != 2
+            or config.getint("Settings", "BatchAllAnimation") != 1):
         raise ValueError("Unexpected default batching settings.")
     return manifest
 
