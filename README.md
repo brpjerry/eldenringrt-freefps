@@ -2,7 +2,7 @@
 
 [![Build and release](https://github.com/brpjerry/eldenringrt-freefps/actions/workflows/build.yml/badge.svg)](https://github.com/brpjerry/eldenringrt-freefps/actions/workflows/build.yml)
 
-An experimental DirectX 12 mod that batches independent vegetation ray-tracing acceleration-structure refits in Elden Ring. The default mode preserves every-frame vegetation updates and the game's RT quality settings.
+An experimental DirectX 12 mod that batches independent ray-tracing acceleration-structure refits after vegetation and character animation in Elden Ring. The default mode preserves every-frame updates and the game's RT quality settings. It runs on Windows and on Linux through Proton (vkd3d-proton).
 
 The project consists of a ReShade add-on and a small native integration patch against a pinned ReShade revision. A stock ReShade runtime does not include the required batching hooks.
 
@@ -22,15 +22,15 @@ The developer build scripts remain in this source repository. They are excluded 
 
 ## How it works
 
-Recognized vegetation animation is followed by eligible in-place BLAS refits. The runtime defers independent refits, assigns separate scratch regions, and emits groups of up to 64. Original barriers remain, dependency boundaries flush queued work, and GPU fences control scratch reuse. Unknown or unsupported work retains its original path.
+Recognized animation compute (vegetation, and by default other pre-RayQuery `_Animation` shaders such as skinned characters) is followed by eligible in-place BLAS refits. The runtime defers independent refits, assigns separate scratch regions, and emits groups of up to 64. Original barriers remain, dependency boundaries flush queued work, and GPU fences control scratch reuse. Unknown or unsupported work retains its original path.
 
-Full-rate mode skips no updates. Extra scratch memory and CPU bookkeeping are the main costs; observed scratch use was 128–224 MiB with a 512 MiB pool ceiling. Optional two-frame updates trade vegetation RT freshness for additional performance.
+Full-rate mode skips no updates. Extra scratch memory and CPU bookkeeping are the main costs; scratch arenas are sized to the refits (about 4 MiB in a tested Proton scene) under a 512 MiB ceiling. Optional two-frame updates trade vegetation RT freshness for additional performance.
 
 [Architecture](docs/ARCHITECTURE.md) describes the dependency checks and fallback behavior.
 
 ## Validation and limits
 
-The original binaries were tested offline on an RTX 5090 with game 1.17.2 / calibrations 1.17.3. One controlled Four Belfries view at 4K RT Maximum measured about 28.9 FPS original versus 53.5 FPS batched. Performance varies by view, lighting and workload; this does not establish a universal gain or rain-related cause.
+The original binaries were tested offline on an RTX 5090 with game 1.17.2 / calibrations 1.17.3. One controlled Four Belfries view at 4K RT Maximum measured about 28.9 FPS original versus 53.5 FPS batched. Under Linux/Proton-GE on the same hardware, a fixed outdoor view measured 64–67 FPS unbatched, 94–97 FPS with vegetation batching, and 98–101 FPS with all-animation batching. Performance varies by view, lighting and workload; this does not establish a universal gain or rain-related cause.
 
 A standalone real-GPU test checks serialized BLAS results, allocation aliases, dependency boundaries and fence-delayed scratch reuse. See [validation notes](docs/VALIDATION.md). Short in-game movement checks looked normal; long sessions, all areas, other GPUs and combinations of hooks have not been validated.
 
@@ -38,7 +38,7 @@ This is an unofficial modified ReShade build. Use the offline profile with EAC d
 
 ## Source layout
 
-- `src/addon/`: vegetation recognition, cadence policy and optional development profiling.
+- `src/addon/`: animation recognition, cadence policy and optional development profiling.
 - `src/native/`: canonical native batching implementation.
 - `patches/`: integration changes applied to pinned ReShade.
 - `tests/`: standalone DirectX 12 correctness test.

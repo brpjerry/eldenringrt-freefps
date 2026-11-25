@@ -45,7 +45,7 @@ def main():
         "runtime_base": PIN["tag"], "runtime_base_commit": PIN["commit"],
         "binary_sha256": hashes, "matches_original_game_tested_binaries": original,
         "launch_entry": "eldenring-rt-batching.me3", "includes_control_scripts": False,
-        "default": {"batch_mode": 2, "update_interval": 1},
+        "default": {"batch_mode": 2, "update_interval": 1, "batch_all_animation": 1},
         "savefile": profile.get("savefile"),
         "validation_note": "Original in-game results apply only to the recorded original hashes.",
     }

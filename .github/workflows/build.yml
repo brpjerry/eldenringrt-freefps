@@ -66,6 +66,15 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
           retention-days: 30
+      # Hosted runners cannot execute DXR. Publish the GPU test so it can be
+      # run on real hardware (including under Proton/vkd3d-proton).
+      - name: Upload GPU test
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gpu-test-${{ github.sha }}
+          path: build/tests/native_batch_test.exe
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

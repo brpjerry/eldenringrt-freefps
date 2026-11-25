@@ -22,7 +22,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -RunGp
 
 The preparation script checks out ReShade commit `18deaa52de0c425a78b329e9cb3c497281cd00ec`, initializes its submodules, applies the integration patch, and copies the canonical native files into the dependency checkout. It also supplies the matching Khronos XML registries to GLAD's reproducible-generation directory.
 
-Edit native code in `src/native/`, then rerun preparation. Do not maintain separate edits in `external/reshade`. Unexpected patch conflicts fail instead of resetting local changes.
+Edit native code in `src/native/`, then rerun preparation. Do not maintain separate edits in `external/reshade`. A checkout prepared with an earlier committed version of the integration patch is upgraded in place. Unexpected patch conflicts fail instead of resetting local changes.
 
 The build script discovers VS 2022 through vswhere, enters its x64 developer environment, and builds the runtime, add-on and test. It creates:
 
@@ -46,7 +46,7 @@ The native build accepts `-SdkVersion` for another installed SDK; that combinati
 python scripts/package.py --binaries build/bin --output dist
 ```
 
-The output is `dist/EldenRing-RT-Batching-1.0.3-portable.zip` plus a SHA-256 file. The archive contains only the two runtime files, four package templates, license notices, a manifest and checksums. It includes no developer scripts, source checkout, captures, game data or other mods.
+The output is `dist/EldenRing-RT-Batching-1.1.0-portable.zip` plus a SHA-256 file. The archive contains only the two runtime files, four package templates, license notices, a manifest and checksums. It includes no developer scripts, source checkout, captures, game data or other mods.
 
 The packager records actual binary hashes. It reports whether they match the original game-tested binaries; a freshly compiled artifact does not inherit that validation merely because compilation passed. Run the GPU test and an offline in-game check before claiming hardware/game validation for a new binary build. CI-built experimental releases explicitly distinguish compilation/package checks from those hardware tests.
 
@@ -67,6 +67,6 @@ The `Build and release` workflow runs for pushes to main, pull requests, version
 
 Each run prepares the pinned dependencies, builds both DLLs and the standalone GPU test, runs release-publishing regression tests, the CPU vegetation-policy test, and the real DLL loading test on WARP, and verifies the archive allowlist, x64 PE headers, defaults, source commit and all checksums. ZIPs and build logs are uploaded as Actions artifacts. Hosted runners do not execute the DXR test or Elden Ring.
 
-For a release, update `version.json` and `docs/RELEASE_NOTES.md`, push the commit, and wait for the main build. Then create and push the matching tag, for example `v1.0.3`. The tag workflow rebuilds that exact commit, verifies its package, creates a draft release, checks uploaded asset digests, and publishes it. A mismatched tag fails, and a published release is never overwritten. The `prerelease` value in `version.json` controls its experimental label.
+For a release, update `version.json` and `docs/RELEASE_NOTES.md`, push the commit, and wait for the main build. Then create and push the matching tag, for example `v1.1.0`. The tag workflow rebuilds that exact commit, verifies its package, creates a draft release, checks uploaded asset digests, and publishes it. A mismatched tag fails, and a published release is never overwritten. The `prerelease` value in `version.json` controls its experimental label.
 
 The packager reads the version from `version.json`; it records the source commit, binary hashes and available compiler/build metadata. No private account token is needed in repository secrets: the release job uses the built-in scoped GitHub token.

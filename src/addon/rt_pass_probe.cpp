@@ -23,9 +23,12 @@ namespace {
 fs::path folder;
 erdlss::GpuProfiler profiler;
 device* active_device=nullptr;
-std::atomic<uint64_t> frame{0}, builds{0}, updates{0}, vegetation{0}, skipped{0}, rays{0};
+std::atomic<uint64_t> frame{0}, builds{0}, updates{0}, vegetation{0}, other_animation{0}, skipped{0}, rays{0};
 std::atomic<uint64_t> uav_barriers{0},uav_after_blas{0};
 std::atomic<uint32_t> interval{1};
+// Also batch refits after other pre-RayQuery animation compute (skinned
+// characters and other animated meshes), not only recognized vegetation.
+std::atomic<bool> all_animation{false};
 std::shared_mutex names_mutex;
 std::unordered_map<uint64_t,std::string> names;
 std::unordered_map<uint64_t,bool> legacy_compute;
@@ -66,7 +69,7 @@ std::string audit_label;
 struct __declspec(uuid("4f39e81a-0139-4dda-9fa1-4513eeb98c61")) ListData {
     uint64_t compute=0,graphics=0;
     std::string last_label,animation;
-    bool saw_animation=false,only_vegetation=true,last_was_blas=false;
+    bool saw_animation=false,only_vegetation=true,only_true_vegetation=true,last_was_blas=false;
 };
 void Log(const std::string& s) {
     reshade::log::message(reshade::log::level::info,s.c_str());
@@ -76,6 +79,9 @@ std::string Name(uint64_t p) {std::shared_lock lock(names_mutex);auto i=names.fi
 bool IsVegetation(const std::string& s) {
     return s.find("_Animation")!=std::string::npos && s.find("_Skin")==std::string::npos &&
         (s.starts_with("SpeedTree_") || s.find("Vesitation")!=std::string::npos || s.find("Grass")!=std::string::npos);
+}
+bool IsBatchableAnimation(const std::string& s) {
+    return IsVegetation(s) || (all_animation.load() && s.find("_Animation")!=std::string::npos);
 }
 void Boundary(command_list* list,const std::string& label,bool force=true) {
     if(!profiler.capturing(frame.load())) return;
@@ -141,11 +147,11 @@ bool Dispatch(command_list* list,uint32_t x,uint32_t y,uint32_t z) {
     auto* d=list->get_private_data<ListData>();if(!d)return false;
     d->last_was_blas=false;
     const auto name=Name(d->compute);
-    const bool safe=IsVegetation(name)&&IsLegacy(d->compute);
+    const bool safe=IsBatchableAnimation(name)&&IsLegacy(d->compute);
     if(batch_tag)batch_tag(list,safe?1:0);
     Boundary(list,"CS "+name+" ["+std::to_string(x)+"x"+std::to_string(y)+"x"+std::to_string(z)+"]");
     if(name.find("_Animation")!=std::string::npos) {
-        d->saw_animation=true;d->only_vegetation &= safe;d->animation=name;
+        d->saw_animation=true;d->only_vegetation &= safe;d->only_true_vegetation &= IsVegetation(name);d->animation=name;
     } else if(d->saw_animation) d->only_vegetation=false; // Unknown intervening compute: preserve the update.
     return false;
 }
@@ -165,12 +171,15 @@ bool BuildAS(command_list* list,acceleration_structure_type type,acceleration_st
     bool eligible=!top && update && d && d->saw_animation && d->only_vegetation && source.handle!=0 && source.handle==dest.handle
         && reinterpret_cast<ID3D12GraphicsCommandList*>(list->get_native())->GetType()==D3D12_COMMAND_LIST_TYPE_DIRECT;
     if(update) ++updates;
-    if(eligible) ++vegetation;
+    // vegetation counts refits eligible for vegetation-only cadence; other
+    // batched animation (characters, animated meshes) is counted separately.
+    if(eligible) ++(d->only_true_vegetation?vegetation:other_animation);
     if(batch_tag)batch_tag(list,0x100|(eligible?1:0));
     bool omit=false;
     {
         std::lock_guard lock(vegetation_mutex);
-        if(eligible) {
+        // Reduced cadence stays vegetation-only, even when other animation is batched.
+        if(eligible && d->only_true_vegetation) {
             auto& last_seen=vegetation_seen[dest.handle];
             omit=SkipVegetationRefit(frame.load(),last_seen,dest.handle,interval.load());
             last_seen=frame.load();
@@ -197,7 +206,7 @@ bool BuildAS(command_list* list,acceleration_structure_type type,acceleration_st
             row<<','<<animation;audit_rows.push_back(row.str());
         }
     }
-    if(d) {d->saw_animation=false;d->only_vegetation=true;d->animation.clear();d->last_was_blas=!top;}
+    if(d) {d->saw_animation=false;d->only_vegetation=true;d->only_true_vegetation=true;d->animation.clear();d->last_was_blas=!top;}
     if(omit) ++skipped;
     return omit;
 }
@@ -262,6 +271,10 @@ void Present(command_queue* queue,swapchain*,const rect*,const rect*,uint32_t,co
         unsigned value=99;input>>value;
         if(!batch_control || value>2 || profiler.armed())reply="Batch mode rejected";
         else {batch_control(value);reply="Batch mode="+std::to_string(value);}
+    } else if(verb=="animation") {
+        unsigned value=99;input>>value;
+        if(value>1 || profiler.armed())reply="Animation scope rejected";
+        else {all_animation=value==1;reply="Batch all animation="+std::to_string(value);}
     } else if(verb=="batchstatus") {
         char buffer[2048]={};if(batch_status)batch_status(buffer,sizeof(buffer));reply=buffer;
     } else if(verb=="batchaudit") {
@@ -276,7 +289,7 @@ void Present(command_queue* queue,swapchain*,const rect*,const rect*,uint32_t,co
         else {interval=n;reply="Vegetation in-place update interval="+std::to_string(n);}
     } else if(verb=="status") {
         std::ostringstream s;s<<"frame="<<frame<<" interval="<<interval<<" builds="<<builds<<" updates="<<updates
-            <<" vegetation="<<vegetation<<" skipped="<<skipped<<" rays="<<rays
+            <<" vegetation="<<vegetation<<" other_animation="<<other_animation<<" skipped="<<skipped<<" rays="<<rays
             <<" uav_barriers="<<uav_barriers<<" uav_after_blas="<<uav_after_blas;reply=s.str();
     } else reply="Unknown command";
     Log(reply);std::ofstream(folder/"command.done")<<reply;
@@ -298,7 +311,9 @@ BOOL APIENTRY DllMain(HMODULE module,DWORD reason,LPVOID) {
         if(batch_control)batch_control(GetPrivateProfileIntW(L"Settings",L"BatchMode",1,(folder/L"RTVegetation.ini").c_str()));
         const auto configured=GetPrivateProfileIntW(L"Settings",L"UpdateInterval",1,(folder/L"RTVegetation.ini").c_str());
         interval=configured>=1 && configured<=4?configured:1;
-        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr));
+        all_animation=GetPrivateProfileIntW(L"Settings",L"BatchAllAnimation",1,(folder/L"RTVegetation.ini").c_str())==1;
+        Log("RT batch experiment loaded; interval="+std::to_string(interval.load())+" native bridge="+std::to_string(batch_control!=nullptr)
+            +" all_animation="+std::to_string(all_animation.load()));
 #define ON(event,fn) reshade::register_event<reshade::addon_event::event>(fn)
         ON(init_device,InitDevice);ON(destroy_device,DestroyDevice);ON(init_command_list,InitList);
         ON(destroy_command_list,DestroyList);ON(reset_command_list,ResetList);ON(close_command_list,CloseList);

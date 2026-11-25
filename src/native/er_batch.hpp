@@ -24,10 +24,13 @@ public:
     void flush(const char *reason);
     void disable(const char *reason);
     bool build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *, UINT post_count);
-    std::shared_ptr<arena> scratch() const;
+    // Every arena this recording references, for submission receipts.
+    std::vector<std::shared_ptr<arena>> scratch() const;
 private:
     struct impl;
     std::unique_ptr<impl> p;
 };
 void submitted(ID3D12CommandQueue *, const std::vector<std::shared_ptr<arena>> &);
+// True when every recorded submission using the arena has completed (diagnostics/tests).
+bool scratch_idle(const std::shared_ptr<arena> &);
 }

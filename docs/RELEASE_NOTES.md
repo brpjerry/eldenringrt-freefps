@@ -1,12 +1,10 @@
-RT Batching 1.0.3 adds a native DLL package for ME3 Manager.
+RT Batching 1.1.0 batches more refits and no longer reserves large scratch memory.
 
-- Load `EldenRingRT.dll` through ME3. The bundled profile enables early loading and lists every companion file for ME3 Manager to import.
-- The custom runtime locates settings and its add-on beside the DLL. The add-on resolves the batching bridge from the active ReShade module rather than the old ASI filename.
-- CI loads the actual runtime and companion add-on in a separate test process using D3D12 WARP, checking settings, exports and bridge activation.
-- Every-frame batching remains the default. The profile runs offline and has no custom save filename.
+- Refits after character and other animation are now batched together with vegetation (`BatchAllAnimation=1`, default). On an RTX 5090 at 4K RT Maximum under Proton, this measured about 5% higher FPS than 1.0.3's vegetation-only batching (98–101 vs 92–97 FPS at one fixed view). Set `BatchAllAnimation=0` to restore 1.0.x behavior.
+- Scratch memory is sized to the refits: about 4 MiB instead of about 136 MiB at the same view. Fixed 8 MiB per-command-list arenas could fill the 512 MiB pool in long sessions and silently switch batching off.
+- The optional two-frame update schedule (`UpdateInterval=2`) still applies only to vegetation.
+- CI now publishes the standalone GPU test so it can run on real hardware. It passed on an RTX 5090 under GE-Proton11-14.
 
-To upgrade, extract the ZIP into a fresh folder and replace the previous RT Batching entry with `EldenRingRT.dll`. Keep one runtime enabled. Old releases cannot acquire these loading changes by renaming their ASI file.
+To upgrade, extract the ZIP into a fresh folder and replace the previous RT Batching entry. Keep the companion add-on and settings together with `EldenRingRT.dll`. If you keep an old `RTVegetation.ini`, the new default still applies unless the file sets `BatchAllAnimation=0`.
 
-Import the ZIP or `eldenring-rt-batching.me3` in ME3 Manager, or launch the included profile directly. Keep the companion add-on and settings together with the DLL. See README.txt for details.
-
-Experimental release: compilation, CPU tests, WARP loading and package checks run in CI. The DXR test is compiled but not run, and no new in-game test is claimed.
+Experimental release: compiled and packaged in CI; the GPU test and in-game measurements ran on Linux/Proton with an RTX 5090. Native Windows was not re-tested for this release.

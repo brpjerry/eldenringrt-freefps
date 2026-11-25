@@ -346,7 +346,7 @@ index e09f3de..11253f9 100644
  	~D3D12GraphicsCommandList();
  
 diff --git a/source/d3d12/d3d12_command_queue.cpp b/source/d3d12/d3d12_command_queue.cpp
-index 2b5073e..3033405 100644
+index 2b5073e..31e83a5 100644
 --- a/source/d3d12/d3d12_command_queue.cpp
 +++ b/source/d3d12/d3d12_command_queue.cpp
 @@ -180,6 +180,7 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
@@ -361,7 +361,7 @@ index 2b5073e..3033405 100644
  
  			// Get original command list pointer from proxy object
  			command_lists[i] = command_list_proxy->_orig;
-+			if (auto arena = command_list_proxy->_er_batch.scratch()) batch_arenas.push_back(std::move(arena));
++			for (auto &arena : command_list_proxy->_er_batch.scratch()) batch_arenas.push_back(std::move(arena));
  		}
  		else
  		{

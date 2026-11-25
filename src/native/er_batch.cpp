@@ -2,6 +2,7 @@
 // Experimental, conservative batching of independent in-place vegetation refits.
 // All original barriers remain. Unknown commands flush before executing.
 #include "er_batch.hpp"
+#include "er_scratch_policy.hpp"
 #ifdef ER_BATCH_STANDALONE
 #include "er_batch_test_device.hpp"
 #else
@@ -22,7 +23,9 @@ using Microsoft::WRL::ComPtr;
 namespace er_batch {
 namespace {
 const GUID committed_id={0xe7812cc7,0x9157,0x4aaf,{0x9b,0x31,0x71,0xb5,0x3c,0x63,0x9d,0x15}};
-constexpr uint64_t arena_size=8ull*1024*1024, max_pool_bytes=512ull*1024*1024;
+// Scratch arenas are sized to the work (er_scratch_policy.hpp): fixed 8 MiB
+// arenas per command list let idle lists pin the whole pool.
+using scratch_policy::max_arena;
 std::atomic<unsigned> mode{0}; // 0 passthrough, 1 audit/simulate, 2 batch
 std::atomic<uint64_t> candidates{0},accepted{0},batches{0},multi_batches{0},batched_builds{0},max_batch{0};
 std::atomic<uint64_t> reject_post{0},reject_resource{0},reject_input{0},reject_scratch{0},reject_mode{0};
@@ -59,24 +62,39 @@ std::vector<std::shared_ptr<arena>> pool;
 struct arena {
     ComPtr<ID3D12Resource> resource;
     ID3D12Device *device=nullptr;
+    uint64_t size=0;
     std::vector<receipt> receipts;
     bool poisoned=false;
 };
 namespace {
-std::shared_ptr<arena> acquire(ID3D12Device *device) {
+uint64_t pool_bytes=0;
+// No command list holds the arena and every recorded submission has completed.
+bool idle(const std::shared_ptr<arena>&a){
+    if(a.use_count()!=1 || a->poisoned)return false;
+    for(auto&r:a->receipts)if(r.fence->GetCompletedValue()<r.value)return false;
+    return true;
+}
+// Smallest idle arena of at least `bytes`, else a new one. Idle arenas are
+// evicted when a new arena would exceed the pool cap.
+std::shared_ptr<arena> acquire(ID3D12Device *device,uint64_t bytes) {
     std::lock_guard lock(pool_mutex);
-    for(auto&a:pool) if(a.use_count()==1 && a->device==device && !a->poisoned) {
-        bool complete=true;for(auto&r:a->receipts)if(r.fence->GetCompletedValue()<r.value){complete=false;break;}
-        if(complete){a->receipts.clear();return a;}
+    std::shared_ptr<arena> best;
+    for(auto&a:pool) if(a->device==device && a->size>=bytes && (!best || a->size<best->size) && idle(a))best=a;
+    if(best){best->receipts.clear();return best;}
+    const auto size=scratch_policy::arena_class(bytes);
+    if(!size)return {};
+    for(auto it=pool.begin();it!=pool.end() && pool_bytes+size>scratch_policy::max_pool;){
+        if(idle(*it)){pool_bytes-=(*it)->size;it=pool.erase(it);}
+        else ++it;
     }
-    if(pool.size()*arena_size>=max_pool_bytes)return {};
-    auto a=std::make_shared<arena>();a->device=device;
+    if(pool_bytes+size>scratch_policy::max_pool)return {};
+    auto a=std::make_shared<arena>();a->device=device;a->size=size;
     D3D12_HEAP_PROPERTIES heap={};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC d={};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=arena_size;
+    D3D12_RESOURCE_DESC d={};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=size;
     d.Height=1;d.DepthOrArraySize=1;d.MipLevels=1;d.SampleDesc.Count=1;
     d.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;d.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,nullptr,IID_PPV_ARGS(&a->resource))))return {};
-    a->resource->SetName(L"ER batching scratch (fence-retired)");pool.push_back(a);return a;
+    a->resource->SetName(L"ER batching scratch (fence-retired)");pool.push_back(a);pool_bytes+=size;return a;
 }
 }
 void committed_resource(ID3D12Resource*r,D3D12_HEAP_FLAGS flags) {
@@ -119,6 +137,9 @@ struct state::impl {
     };
     std::vector<build_record> pending;
     std::shared_ptr<arena> scratch;
+    std::vector<std::shared_ptr<arena>> retired; // outgrown arenas still referenced by this recording
+    bool scratch_recorded=false; // a flushed batch in this recording used `scratch`
+    uint64_t simulated=0;        // audit mode: arena size batch mode would hold
     std::unordered_map<std::string,D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO> sizes;
     bool resolve(uint64_t address,uint64_t bytes,region& out) {
         if(!address||!bytes||address>UINT64_MAX-bytes)return false;
@@ -146,8 +167,10 @@ state::state():p(std::make_unique<impl>()){}
 state::~state()=default;
 void state::init(reshade::d3d12::device_impl*d,ID3D12GraphicsCommandList*n){p->device=d;p->native=n;}
 void state::tag(unsigned flags){if(flags&0x100)p->eligible=(flags&1)!=0;else p->safe_shader=(flags&1)!=0;}
-void state::reset(){p->pending.clear();p->scratch.reset();p->offset=0;p->pending_mode=0;p->safe_shader=false;p->eligible=false;p->disabled=false;}
-std::shared_ptr<arena> state::scratch()const{return p->scratch;}
+void state::reset(){p->pending.clear();p->scratch.reset();p->retired.clear();p->scratch_recorded=false;p->simulated=0;p->offset=0;p->pending_mode=0;p->safe_shader=false;p->eligible=false;p->disabled=false;}
+std::vector<std::shared_ptr<arena>> state::scratch()const{
+    auto all=p->retired;if(p->scratch)all.push_back(p->scratch);return all;
+}
 void state::flush(const char *reason) {
     if(p->pending.empty())return;
     const uint64_t n=p->pending.size();++batches;
@@ -172,6 +195,7 @@ void state::flush(const char *reason) {
         }
         // Required before TLAS/rays, dependent work, and reuse of this arena.
         p->native->ResourceBarrier(1,&b);
+        p->scratch_recorded=true;
     }
     p->pending.clear();p->offset=0;p->pending_mode=0;
 }
@@ -244,7 +268,7 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
     if(it!=p->sizes.end())sizes=it->second;
     else {p->dxr->GetRaytracingAccelerationStructurePrebuildInfo(&inputs,&sizes);if(p->sizes.size()>4096)p->sizes.clear();p->sizes.emplace(std::move(key),sizes);}
     const auto needed=align256(sizes.UpdateScratchDataSizeInBytes);
-    if(!needed || needed>arena_size || !sizes.ResultDataMaxSizeInBytes){++reject_scratch;flush("size");return false;}
+    if(!needed || needed>max_arena || !sizes.ResultDataMaxSizeInBytes){++reject_scratch;flush("size");return false;}
     if(!p->resolve(d->DestAccelerationStructureData,sizes.ResultDataMaxSizeInBytes,record.write)){
         ++reject_resource;trace(p->id,"reject_destination",d->DestAccelerationStructureData);flush("resource");return false;}
     for(const auto&read:record.reads)if(overlap(record.write,read)){++reject_input;flush("self_overlap");return false;}
@@ -255,13 +279,37 @@ bool state::build(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC*d,UIN
         for(auto&r:record.reads)conflict|=overlap(r,other.write);
     }
     if(conflict)flush("conflict");
-    if(p->pending.size()>=64 || needed>arena_size-p->offset)flush("capacity");
-    if(current==2 && !p->scratch)p->scratch=acquire(reinterpret_cast<ID3D12Device*>(p->device->get_native()));
-    if(current==2 && !p->scratch){++reject_scratch;flush("allocation");return false;}
+    if(p->pending.size()>=64)flush("capacity");
+    // Both modes follow the same sizing policy; audit mode only simulates the
+    // arena, so its batch boundaries match batch mode when allocation succeeds.
+    const uint64_t held=current==2?(p->scratch?p->scratch->size:0):p->simulated;
+    uint64_t want=scratch_policy::arena_for(held,p->offset,needed);
+    if(!want){flush("capacity");want=scratch_policy::arena_for(held,0,needed);}
+    if(!want){++reject_scratch;flush("size");return false;}
+    if(current!=2)p->simulated=want;
+    else if(want!=held){
+        auto next=acquire(reinterpret_cast<ID3D12Device*>(p->device->get_native()),want);
+        // Could not grow: start a new batch in the current arena if the build fits.
+        if(!next && !p->pending.empty()){flush("capacity");if(held>=needed)want=held;}
+        if(want!=held){
+            if(!next){++reject_scratch;flush("allocation");return false;}
+            // Queued builds keep their offsets in the larger arena. An arena
+            // already used by a flushed batch stays with the list until reset.
+            if(p->scratch && p->scratch_recorded)p->retired.push_back(std::move(p->scratch));
+            p->scratch=std::move(next);p->scratch_recorded=false;
+        }
+    }
     record.scratch_offset=p->offset;p->offset+=needed;p->pending_mode=current;
     trace(p->id,"accepted",d->DestAccelerationStructureData,needed,record.reads.size());
     p->pending.push_back(std::move(record));++accepted;
     return current==2;
+}
+bool scratch_idle(const std::shared_ptr<arena>&a){
+    if(!a)return false;
+    std::lock_guard lock(pool_mutex);
+    if(a->poisoned)return false;
+    for(auto&r:a->receipts)if(r.fence->GetCompletedValue()<r.value)return false;
+    return true;
 }
 void submitted(ID3D12CommandQueue*q,const std::vector<std::shared_ptr<arena>>&arenas){
     if(arenas.empty())return;
@@ -304,6 +352,6 @@ extern "C" __declspec(dllexport) void ERBatchStatus(char*buffer,unsigned capacit
      <<" reject_scratch="<<reject_scratch<<" reject_mode="<<reject_mode
      <<" flush_transition="<<flush_transition<<" flush_alias="<<flush_alias<<" flush_dispatch="<<flush_dispatch
      <<" flush_work="<<flush_work<<" flush_conflict="<<flush_conflict;
-    {std::lock_guard lock(pool_mutex);s<<" scratch_mib="<<pool.size()*arena_size/(1024*1024);}
+    {std::lock_guard lock(pool_mutex);s<<" scratch_kib="<<pool_bytes/1024<<" scratch_arenas="<<pool.size();}
     if(capacity){const auto text=s.str();const auto n=std::min<size_t>(text.size(),capacity-1);std::memcpy(buffer,text.data(),n);buffer[n]=0;}
 }
