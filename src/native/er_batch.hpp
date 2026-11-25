@@ -31,4 +31,6 @@ private:
     std::unique_ptr<impl> p;
 };
 void submitted(ID3D12CommandQueue *, const std::vector<std::shared_ptr<arena>> &);
+// True when every recorded submission using the arena has completed (diagnostics/tests).
+bool scratch_idle(const std::shared_ptr<arena> &);
 }

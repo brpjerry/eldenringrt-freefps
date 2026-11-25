@@ -23,7 +23,7 @@ namespace {
 fs::path folder;
 erdlss::GpuProfiler profiler;
 device* active_device=nullptr;
-std::atomic<uint64_t> frame{0}, builds{0}, updates{0}, vegetation{0}, skipped{0}, rays{0};
+std::atomic<uint64_t> frame{0}, builds{0}, updates{0}, vegetation{0}, other_animation{0}, skipped{0}, rays{0};
 std::atomic<uint64_t> uav_barriers{0},uav_after_blas{0};
 std::atomic<uint32_t> interval{1};
 // Also batch refits after other pre-RayQuery animation compute (skinned
@@ -171,7 +171,9 @@ bool BuildAS(command_list* list,acceleration_structure_type type,acceleration_st
     bool eligible=!top && update && d && d->saw_animation && d->only_vegetation && source.handle!=0 && source.handle==dest.handle
         && reinterpret_cast<ID3D12GraphicsCommandList*>(list->get_native())->GetType()==D3D12_COMMAND_LIST_TYPE_DIRECT;
     if(update) ++updates;
-    if(eligible) ++vegetation;
+    // vegetation counts refits eligible for vegetation-only cadence; other
+    // batched animation (characters, animated meshes) is counted separately.
+    if(eligible) ++(d->only_true_vegetation?vegetation:other_animation);
     if(batch_tag)batch_tag(list,0x100|(eligible?1:0));
     bool omit=false;
     {
@@ -287,7 +289,7 @@ void Present(command_queue* queue,swapchain*,const rect*,const rect*,uint32_t,co
         else {interval=n;reply="Vegetation in-place update interval="+std::to_string(n);}
     } else if(verb=="status") {
         std::ostringstream s;s<<"frame="<<frame<<" interval="<<interval<<" builds="<<builds<<" updates="<<updates
-            <<" vegetation="<<vegetation<<" skipped="<<skipped<<" rays="<<rays
+            <<" vegetation="<<vegetation<<" other_animation="<<other_animation<<" skipped="<<skipped<<" rays="<<rays
             <<" uav_barriers="<<uav_barriers<<" uav_after_blas="<<uav_after_blas;reply=s.str();
     } else reply="Unknown command";
     Log(reply);std::ofstream(folder/"command.done")<<reply;

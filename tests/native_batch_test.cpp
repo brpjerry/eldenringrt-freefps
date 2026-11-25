@@ -103,7 +103,13 @@ int main(){try{
         list->CopyResource(readback.Get(),serialized.Get());transition.Transition.StateBefore=D3D12_RESOURCE_STATE_COPY_SOURCE;transition.Transition.StateAfter=D3D12_RESOURCE_STATE_COPY_DEST;list->ResourceBarrier(1,&transition);submit();
         check(readback->Map(0,nullptr,&data));std::vector<unsigned char> bytes(total);std::memcpy(bytes.data(),data,total);readback->Unmap(0,nullptr);return bytes;};
     ERBatchControl(0);for(unsigned i=0;i<count;++i)update(i);auto reference=snapshot();
-    ERBatchControl(2);for(unsigned i=0;i<count;++i){batch.tag(1);batch.dispatch();update(i);}auto batched=snapshot();
+    auto batches_so_far=[&](){char text[2048];ERBatchStatus(text,sizeof(text));const std::string s(text);const auto at=s.find(" batches=");return std::stoull(s.substr(at+9));};
+    // Bugs caught: 0, False positives: 0
+    // Audit mode must model batch mode's arena sizing: same group boundaries.
+    const auto audit_start=batches_so_far();ERBatchControl(1);for(unsigned i=0;i<count;++i){batch.tag(1);batch.dispatch();update(i);}snapshot();
+    const auto audit_batches=batches_so_far()-audit_start;
+    const auto batch_start=batches_so_far();ERBatchControl(2);for(unsigned i=0;i<count;++i){batch.tag(1);batch.dispatch();update(i);}auto batched=snapshot();
+    if(batches_so_far()-batch_start!=audit_batches)throw std::runtime_error("Audit and batch modes formed different groups");
     if(reference!=batched)throw std::runtime_error("Serial/batched serialized geometry differs");
     std::cout<<"PASS: 32 batched updates match serial AS serialization byte-for-byte ("<<total<<" bytes).\n";
     ComPtr<ID3D12Resource> alias;
@@ -125,10 +131,20 @@ int main(){try{
     // its command-list lease must not make the in-flight scratch reusable.
     ComPtr<ID3D12Fence> gate;check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)));
     struct release_gate {ID3D12Fence*f;~release_gate(){f->Signal(1);}} gate_guard{gate.Get()};
+    // Bugs caught: 0, False positives: 0
+    // Only the pool may own the arena once the list is reset; its fence
+    // receipt alone must keep it in flight until the gate opens.
     update(0);batch.flush("Close");check(list->Close());
-    auto first_arenas=batch.scratch();if(first_arenas.size()!=1)throw std::runtime_error("Expected one scratch arena");auto first_arena=first_arenas.front();auto*first_identity=first_arena.get();
-    check(queue->Wait(gate.Get(),1));ID3D12CommandList*first_list=list.Get();queue->ExecuteCommandLists(1,&first_list);
-    er_batch::submitted(queue.Get(),{first_arena});batch.reset();first_arena.reset();
+    std::weak_ptr<er_batch::arena> first_weak;const er_batch::arena*first_identity=nullptr;
+    {
+        auto first_arenas=batch.scratch();if(first_arenas.size()!=1)throw std::runtime_error("Expected one scratch arena");
+        first_weak=first_arenas.front();first_identity=first_arenas.front().get();
+        check(queue->Wait(gate.Get(),1));ID3D12CommandList*first_list=list.Get();queue->ExecuteCommandLists(1,&first_list);
+        er_batch::submitted(queue.Get(),first_arenas);
+    }
+    batch.reset();
+    if(first_weak.expired())throw std::runtime_error("Pool released an in-flight arena");
+    if(er_batch::scratch_idle(first_weak.lock()))throw std::runtime_error("In-flight arena reported idle: submission fence not recorded");
     ComPtr<ID3D12CommandAllocator> second_allocator;check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&second_allocator)));
     ComPtr<ID3D12GraphicsCommandList4> second_list;check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,second_allocator.Get(),nullptr,IID_PPV_ARGS(&second_list)));
     er_batch::state second_batch;second_batch.init(&adapter_device,second_list.Get());
@@ -142,6 +158,7 @@ int main(){try{
     er_batch::submitted(queue.Get(),second_batch.scratch());check(queue->Signal(fence.Get(),++serial));
     check(gate->Signal(1));check(fence->SetEventOnCompletion(serial,event));
     if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)throw std::runtime_error("Deferred scratch test timeout");
+    if(!er_batch::scratch_idle(first_weak.lock()))throw std::runtime_error("Arena not reusable after its submission completed");
     check(device->GetDeviceRemovedReason());second_batch.reset();check(allocator->Reset());check(list->Reset(allocator.Get(),nullptr));
     if(reference!=snapshot())throw std::runtime_error("Deferred scratch serialization mismatch");
     std::cout<<"PASS: GPU fence prevents reuse of in-flight scratch after command-list lease release.\n";

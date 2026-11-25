@@ -75,6 +75,11 @@ if($Target -in 'All','Test'){
         Invoke-Logged (Join-Path $tests 'vegetation_policy_test.exe') @() (Join-Path $build 'policy-test-results.txt')
         Get-Content -LiteralPath (Join-Path $build 'policy-test-results.txt')
         Invoke-Logged $cl @('/nologo','/std:c++20','/EHsc','/W4','/MT','/O2',
+            "/I$repo\src\native",(Join-Path $repo 'tests\scratch_policy_test.cpp'),
+            '/Fescratch_policy_test.exe') (Join-Path $build 'scratch-policy-build.log')
+        Invoke-Logged (Join-Path $tests 'scratch_policy_test.exe') @() (Join-Path $build 'scratch-policy-test-results.txt')
+        Get-Content -LiteralPath (Join-Path $build 'scratch-policy-test-results.txt')
+        Invoke-Logged $cl @('/nologo','/std:c++20','/EHsc','/W4','/MT','/O2',
             (Join-Path $repo 'tests\runtime_load_test.cpp'),'/Feruntime_load_test.exe',
             '/link','user32.lib','d3d12.lib','dxgi.lib') (Join-Path $build 'runtime-load-build.log')
         if($RunGpuTests){

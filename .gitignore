@@ -4,6 +4,7 @@
 /.venv/
 .vs/
 __pycache__/
+artifacts/
 *.pyc
 *.pyo
 *.obj

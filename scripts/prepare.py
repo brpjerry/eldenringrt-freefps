@@ -5,6 +5,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = json.loads((ROOT / "upstream.json").read_text(encoding="utf-8"))
@@ -13,6 +14,45 @@ def git(*args, cwd=None, capture=False, check=True):
     return subprocess.run(["git", *map(str, args)], cwd=cwd, check=check,
                           text=True, stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if capture else None)
+
+def previous_patches():
+    """Earlier committed versions of the integration patch, newest first."""
+    log = git("log", "--format=%H", "--", PIN["patch"], cwd=ROOT, capture=True, check=False)
+    seen = set()
+    for commit in log.stdout.split() if log.returncode == 0 else []:
+        blob = subprocess.run(["git", "show", f"{commit}:{PIN['patch']}"], cwd=ROOT, capture_output=True)
+        if blob.returncode == 0 and blob.stdout not in seen:
+            seen.add(blob.stdout)
+            yield commit, blob.stdout
+
+def apply_integration(target, patch):
+    """Apply the integration patch, or replace a fully applied earlier version of it."""
+    def check(path, *flags):
+        return git("apply", "--ignore-space-change", *flags, "--check", path, cwd=target, check=False, capture=True).returncode == 0
+    if check(patch):
+        git("apply", "--ignore-space-change", patch, cwd=target)
+        return "applied"
+    if check(patch, "--reverse"):
+        return "already applied"
+    current = patch.read_bytes()
+    for commit, content in previous_patches():
+        if content == current:
+            continue
+        with tempfile.NamedTemporaryFile(suffix=".patch", delete=False) as handle:
+            handle.write(content)
+        old = Path(handle.name)
+        try:
+            if check(old, "--reverse"):
+                git("apply", "--ignore-space-change", "--reverse", old, cwd=target)
+                if not check(patch):
+                    git("apply", "--ignore-space-change", old, cwd=target)
+                    break
+                git("apply", "--ignore-space-change", patch, cwd=target)
+                return f"replaced patch from {commit[:7]}"
+        finally:
+            old.unlink()
+    raise SystemExit("Integration patch conflicts with local changes; nothing was reset. "
+                     "If external/reshade holds other edits, delete it and run prepare.py again.")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,15 +81,8 @@ def main():
     command = ["-c", "protocol.file.allow=always"] if args.cache else []
     git(*command, "submodule", "update", "--init", "--recursive", "--jobs", "4", cwd=target)
     git("submodule", "sync", "--recursive", cwd=target)
-    patch = ROOT / PIN["patch"]
-    forward = git("apply", "--ignore-space-change", "--check", patch, cwd=target, check=False, capture=True)
-    if forward.returncode == 0:
-        git("apply", "--ignore-space-change", patch, cwd=target)
-    else:
-        reverse = git("apply", "--ignore-space-change", "--reverse", "--check", patch, cwd=target, check=False, capture=True)
-        if reverse.returncode:
-            raise SystemExit("Integration patch conflicts with local changes; nothing was reset.")
-    for name in ("er_batch.cpp", "er_batch.hpp"):
+    print("Integration patch:", apply_integration(target, ROOT / PIN["patch"]))
+    for name in ("er_batch.cpp", "er_batch.hpp", "er_scratch_policy.hpp"):
         shutil.copyfile(ROOT / "src" / "native" / name, target / "source" / "d3d12" / name)
     registry = target / "deps" / "glad" / "glad" / "files"
     if not registry.is_dir():

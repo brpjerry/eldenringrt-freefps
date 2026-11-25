@@ -22,7 +22,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -RunGp
 
 The preparation script checks out ReShade commit `18deaa52de0c425a78b329e9cb3c497281cd00ec`, initializes its submodules, applies the integration patch, and copies the canonical native files into the dependency checkout. It also supplies the matching Khronos XML registries to GLAD's reproducible-generation directory.
 
-Edit native code in `src/native/`, then rerun preparation. Do not maintain separate edits in `external/reshade`. Unexpected patch conflicts fail instead of resetting local changes.
+Edit native code in `src/native/`, then rerun preparation. Do not maintain separate edits in `external/reshade`. A checkout prepared with an earlier committed version of the integration patch is upgraded in place. Unexpected patch conflicts fail instead of resetting local changes.
 
 The build script discovers VS 2022 through vswhere, enters its x64 developer environment, and builds the runtime, add-on and test. It creates:
 
